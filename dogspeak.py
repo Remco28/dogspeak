@@ -143,16 +143,28 @@ def record(path):
     child = subprocess.Popen(["pw-record", "--rate", str(SAMPLE_RATE), "--channels", "1",
                               "--format", "f32", str(path)],
                              stdin=subprocess.DEVNULL, start_new_session=True)
+    stopped_by_us = False
     try:
         input("Recording. Press Enter to stop (Ctrl-C cancels): ")
     finally:
         if child.poll() is None:
             child.send_signal(signal.SIGINT)
+            stopped_by_us = True
         try:
             status = child.wait(timeout=5)
         except subprocess.TimeoutExpired:
             child.kill()
             status = child.wait()
+    if status == 1 and stopped_by_us:
+        # PipeWire can return 1 for an intentional SIGINT despite finalizing
+        # a valid WAV. Never accept an early device failure on status alone.
+        import soundfile as sf
+        try:
+            completed = sf.info(path)
+            if completed.frames > 0 and completed.samplerate == SAMPLE_RATE:
+                return
+        except (OSError, RuntimeError):
+            pass
     if status not in (0, -signal.SIGINT, 128 + signal.SIGINT):
         raise RuntimeError(f"pw-record exited with status {status}")
 

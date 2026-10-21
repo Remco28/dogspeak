@@ -368,6 +368,27 @@ class BenchmarkTests(unittest.TestCase):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_pipewire_sigint_exit_one_accepts_valid_audio_not_early_failure(self):
+        import dogspeak
+        import numpy as np
+        import soundfile as sf
+        for already_failed in (False, True):
+            with self.subTest(already_failed=already_failed), tempfile.TemporaryDirectory(dir=ROOT) as tmp:
+                path = Path(tmp) / "sample.wav"
+                sf.write(path, np.zeros(1600, dtype=np.float32), 16000, subtype="FLOAT")
+                child = mock.Mock()
+                child.poll.return_value = 1 if already_failed else None
+                child.wait.return_value = 1
+                with mock.patch("subprocess.Popen", return_value=child), \
+                        mock.patch("builtins.input", return_value=""):
+                    if already_failed:
+                        with self.assertRaisesRegex(RuntimeError, "status 1"):
+                            dogspeak.record(path)
+                        child.send_signal.assert_not_called()
+                    else:
+                        dogspeak.record(path)
+                        child.send_signal.assert_called_once_with(signal.SIGINT)
+
     def test_recording_finalizes_child_on_enter_interrupt_or_timeout(self):
         import dogspeak
         record = getattr(dogspeak, "record", None)

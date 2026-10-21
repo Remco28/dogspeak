@@ -1,11 +1,19 @@
 # CPU feasibility: Bark 3.0 Clean
 
-## Verdict: PARTIAL — engine validated, personal dictation not yet validated
+## Initial engine-test verdict: PARTIAL
+
+This report preserves the original engine experiment and its measurements.
+Subsequently, the user recorded two natural-speech samples, confirmed filler
+removal, and accepted the observed paragraph-at-a-time latency. A word
+substitution was also observed; personal recordings and transcripts remain
+private. The user approved an editor-first scratchpad and a future prompt
+workshop; see PRODUCT.md and ARCHITECTURE.md. Broad technical-vocabulary and
+self-correction accuracy still require ongoing use, not assumptions from two
+samples. The “What remains” list below records the original experiment's gate.
 
 Actual inference ran on the ThinkPad; there is no fabricated output in this
-report. The model is a viable candidate for a local scratchpad. Whether its
-cleanup and technical vocabulary are good for the user remains untested.
-No GUI or global hotkey integration has been built.
+report. At the time of the initial experiment, personal dictation quality and
+GUI integration were not yet tested.
 
 ## Environment
 

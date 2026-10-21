@@ -1,7 +1,7 @@
 [project]
 name = "dogspeak"
-version = "0.1.0"
-description = "Local dictation scratchpad experiment: Bark Clean CPU feasibility first"
+version = "0.2.0"
+description = "An editor-first local dictation scratchpad and prompt design lab"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "torch>=2.8",

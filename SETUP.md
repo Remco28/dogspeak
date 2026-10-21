@@ -1,10 +1,29 @@
-# Reproducing the Dogspeak engine experiment
+# Dogspeak setup
 
 The working environment and model are already installed in this checkout.
-Nothing was installed system-wide; no service, login startup entry, global
-hotkey, or Spokenly setting was changed. Public source does not include the local environment, model weights, recordings, or personal transcripts.
+No model service, login startup entry, or Spokenly setting is required. The
+user-level application launcher is installed separately; the global GNOME
+shortcut is explicit opt-in. Public source does not include the local
+environment, model weights, recordings, databases or personal transcripts.
 
-## Environment
+## Native desktop prerequisites
+
+The GUI uses distro Python and PyGObject; it does not import the ASR packages.
+On this Ubuntu machine, `python3-gi`, `gir1.2-gtk-4.0` and `gir1.2-adw-1` were
+already installed. PipeWire tools `pw-record` and `pw-dump` provide capture and
+microphone discovery. No GTK package was installed or upgraded for this app.
+Check a fresh machine before installing its distro equivalents:
+
+```sh
+/usr/bin/python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw; print(Gtk.get_major_version(), Adw.get_major_version())"
+command -v pw-record pw-dump
+```
+
+`xvfb-run` is needed only for the headless native test suite. Use the existing
+system bindings with `app.sh`; do not add system dist-packages to the model
+venv or attempt to run the GUI under the inference interpreter.
+
+## Inference environment
 
 Python 3.12 and uv are required. This machine already had both available.
 From the repository root:
@@ -68,7 +87,8 @@ accuracy. They live only under ignored `samples/`.
 ## Privacy and attribution
 
 - `samples/`, `models/`, `recordings/`, `results/`, `.venv/`, and `.env*` are
-  excluded from Git. Do not commit your microphone recordings or transcripts.
+  excluded from Git. GUI user data additionally lives in the XDG data directory
+  outside the repository. Do not commit recordings, databases or transcripts.
 - Recording is opt-in. No microphone was opened for the automated benchmark.
 - Model and processor assets are fetched during setup. Inference uses local
   assets; `run.sh` enables Hugging Face/Transformers offline mode.

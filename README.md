@@ -1,59 +1,85 @@
 # Dogspeak
 
-A small local dictation-scratchpad project, starting with a **Bark 3.0 Clean CPU feasibility test**. There is no GUI yet. Spokenly and desktop hotkeys are untouched.
+An **editor-first local dictation scratchpad**, growing toward a prompt design lab. Dictate a paragraph, edit it, and copy it to a coding agent. The first desktop version uses GTK4/libadwaita, local Bark Clean speech recognition, and SQLite autosave. No cloud requests or language-model processing are made.
 
-**Initial result:** real speech transcribes locally on this ThinkPad. Short clips took about 1–2 seconds with the model loaded; a repeated 33-second clip took about 4–5 seconds. The efficient FP32 loading path used about 3.1 GiB resident. This is promising, but the user's own speech and cleanup quality are not yet validated. See [BENCHMARK.md](BENCHMARK.md) for measurements, limitations, and raw public-sample output.
+## Open the scratchpad
 
-## Try your own speech
-
-On the original ThinkPad checkout, the environment and model are already installed. For a fresh clone, first follow [SETUP.md](SETUP.md) to install dependencies and download the model. Then:
+On the original ThinkPad checkout, dependencies and model assets are already present:
 
 ```sh
 cd ~/Dev/dogspeak
-./run.sh listen
+./app.sh
 ```
 
-1. Wait for the model to load (roughly half a minute; it stays loaded for the session).
-2. Press **Enter** to start recording using your system's default PipeWire microphone.
-3. Speak normally. Press **Enter** again to stop and see the transcript.
-4. Repeat with another thought without reloading the model.
-5. Type **q**, then Enter, to exit. Ctrl-C stops the session and finalizes an active recording.
+For a fresh clone, follow [SETUP.md](SETUP.md) first. The native frontend runs with distro `/usr/bin/python3` and PyGObject. A separate project-venv Python worker loads the model once per session; editing stays responsive during startup and transcription. Startup can take roughly half a minute and the resident model process uses about 3.1 GiB of RAM.
 
-The microphone is **off until you explicitly start recording**. Recordings are retained under `recordings/` for review and are ignored by Git. Keep each recording under **120 seconds**; longer clips are rejected, not silently truncated. Check the input device in system sound settings first if needed. This does not repair an unreliable Bluetooth microphone.
+### First-version workflow
 
-Try a normal coding-agent prompt, then one with hesitations, technical names, and a correction such as “actually, don't change that function.” Review whether the cleanup preserved your intent. No text is pasted or sent anywhere automatically.
+- Edit the main draft and its title; changes save locally.
+- **Record / Stop** or **Ctrl+Shift+R** toggles capture while the app has focus.
+- Select **System default** or a specific microphone.
+- After stopping, the transcript appends as a new paragraph. You can keep editing while it processes.
+- **Copy all** or **Ctrl+Shift+C** copies the draft; ordinary selection/copy also works.
+- **New draft / Ctrl+N** starts another draft without discarding the previous one; reopen saved drafts when needed.
+- Import an existing WAV/FLAC to retry a recording. The original CLI is still available below.
 
-**Current prototype differences from the intended app:** terminal input instead of a global hotkey, printed transcripts instead of an editable scratchpad, and manual terminal selection/copying. Those UI features come only after the model earns its place.
+Recording starts only on explicit action, never at app launch or as a deferred surprise after loading. Capture automatically stops at 115 seconds, below the engine's 120-second input limit. Closing the app finalizes capture and stops its model worker; there is no permanent background service or automatic login startup. No text is pasted or sent to another program automatically.
 
-## Transcribe and measure existing audio
+User data is separate from the checkout, under `$XDG_DATA_HOME/dogspeak` (normally `~/.local/share/dogspeak`). This includes the local database, recordings, original ASR text and content revisions. `DOGSPEAK_DATA_DIR` overrides this for isolated testing. Recording files are retained; review disk use and remove unwanted audio deliberately. No user data is uploaded or committed.
+
+### Application launcher and optional global shortcut
+
+Install the launcher in your user account (no sudo):
 
 ```sh
+/usr/bin/python3 desktop_install.py
+```
+
+Dogspeak will appear in the desktop application launcher. To additionally opt in to a GNOME **Super+Shift+D** global record toggle:
+
+```sh
+/usr/bin/python3 desktop_install.py --shortcut
+```
+
+This preserves other custom shortcuts and refuses a conflicting custom binding. It does not take over Spokenly's shortcut. If Dogspeak is not running, the first invocation opens/loads it; recording is not queued while the model loads. The app must remain open for warm, ready-to-record use. You can also assign `~/Dev/dogspeak/app.sh --toggle-recording` in your desktop's shortcut settings.
+
+## Product direction
+
+The editor remains the primary artifact. Future, separately approved operations are **clean up**, **combine/structure**, and **develop/critique a prompt**. They will propose revisions rather than silently replacing your draft, preserve source notes, and ask about missing or contradictory requirements. Those LLM features are not in this release. See [PRODUCT.md](PRODUCT.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for the recorded decisions.
+
+## Existing CLI and measurements
+
+```sh
+# Interactive terminal recording (Enter starts/stops; q quits)
+./run.sh listen
+
+# Transcribe files; two ADDITIONAL repeats after the first inference
 ./run.sh transcribe samples/jfk.flac --threads 4 --repeats 2 \
   --json results/cli-benchmark.json
 ```
 
-`--repeats 2` means **two additional inferences after the first** (three runs per clip). Multiple input files share one loaded model. Output separates load time, process-first inference, per-clip timings, real-time factor, current resident RAM, and lifetime peak resident RAM. Lower real-time factor is faster: below 1 means processing faster than the audio duration.
+Multiple files share one loaded model. The CLI reports startup, first/repeat inference, audio duration, real-time factor, current RSS and lifetime peak RSS separately. It accepts nonempty finite audio up to 120 seconds, downmixes stereo and resamples to 16 kHz. For paths outside the checkout, pass absolute filenames. CLI recordings/results remain under the Git-ignored source directories; GUI data lives in the XDG data directory instead.
 
-WAV/FLAC and other formats supported by libsndfile can be read; stereo is downmixed and sample rates are converted to 16 kHz. Inputs must be nonempty, finite, and no longer than 120 seconds. Inference is whole-recording, not live streaming. For paths outside this checkout, pass absolute filenames.
-
-`run.sh` uses the project's installed `.venv` directly and enables offline mode. It never installs or downloads anything during use. The model and processor load from local paths.
+Public speech and the user's own speech have run on this ThinkPad. The user confirmed disfluency cleanup; this does not imply perfect names, technical vocabulary, or self-correction handling. [BENCHMARK.md](BENCHMARK.md) retains the initial CPU measurements and their limitations. Dictation and inference use local assets; model/processor downloads happen only during setup.
 
 ## Tests
 
 ```sh
-.venv/bin/python -m unittest discover -s tests -v
-sh -n run.sh
+./test.sh
 ```
 
-Unit tests do not capture audio or load the real model. Real-weight inference is verified separately by the benchmark; successful mocked tests alone are not evidence of recognition quality.
+This runs core/ASR tests in the inference venv, then native GTK tests under Xvfb using system Python. GUI bindings are intentionally not injected into the inference environment. Automated unit tests use isolated data and simulated hardware/model behavior where appropriate; real recognition and the PipeWire capture path are exercised separately with public speech. Never treat mocked output as proof of transcription quality.
 
-## Project notes
+## Verification
 
-- [PRODUCT.md](PRODUCT.md): small scratchpad scope and acceptance gate.
-- [BENCHMARK.md](BENCHMARK.md): measured CPU feasibility and remaining questions.
-- [SETUP.md](SETUP.md): reproducible dependencies, pinned downloads, privacy, and attribution.
-- `upstream.json`: source revisions, sizes, and hashes.
-- `fixtures.json`: public speech references and stable fixture identities.
-- `vendor/`: unchanged upstream loader, model card, and attribution notice.
+See [the scratchpad verification report](docs/SCRATCHPAD-VERIFICATION.md) for
+real native-app/worker/capture/persistence checks and an actual screenshot.
 
-No system service, startup entry, clipboard integration, or desktop shortcut is installed. Personal recordings and transcripts, model weights, and the environment are excluded from Git.
+## Files and attribution
+
+- [SETUP.md](SETUP.md): prerequisites, pinned downloads, offline assets, privacy.
+- `upstream.json` / `fixtures.json`: source revisions, checksums, public fixture identities.
+- `vendor/`: unchanged upstream loader, model card and attribution notice.
+- `docs/`: public-sample benchmark evidence only—no personal recordings/transcripts.
+
+Model derivatives are CC-BY-4.0; retain `vendor/NOTICE`. A license for new Dogspeak application code has not yet been selected. Model weights, `.venv`, credentials, recordings, raw private results and user databases are not published.

@@ -9,3 +9,8 @@ results/
 .env.*
 !.env.example
 vendor/.cache/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+.test-data/
