@@ -12,17 +12,115 @@ import gi
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = 'io.github.Remco28.Dogspeak'
 MAX_IMPORT_BYTES = 256 * 1024 * 1024
+# The global binding desktop_install.py registers; also an in-app accelerator.
+SHORTCUT_LABEL = 'Super+R'
 
 
 def background(fn):
     thread = threading.Thread(target=fn, daemon=True)
     thread.start()
     return thread
+
+
+OVERLAY_BUS = 'io.github.Remco28.Dogspeak.Overlay'
+OVERLAY_PATH = '/io/github/Remco28/Dogspeak/Overlay'
+OVERLAY_IFACE = 'io.github.Remco28.Dogspeak.Overlay'
+
+
+class OverlayStatus:
+    """What the overlay shows; drawn by the Shell, never a GTK window GNOME would keep behind."""
+
+    def __init__(self):
+        self._text = ''
+        self._visible = False
+        self.state = ''
+        self.detail = ''
+        self.hint = ''
+
+    def get_text(self):
+        return self._text
+
+    def set_text(self, text):
+        self._text = text
+
+    def get_visible(self):
+        return self._visible
+
+    def set_visible(self, visible):
+        self._visible = bool(visible)
+        if not visible:
+            self._text = self.state = self.detail = self.hint = ''
+
+
+class ShellOverlay:
+    """Client for the dogspeak-overlay GNOME Shell extension (gnome-extension/).
+
+    available is False when the extension is not running; callers then fall
+    back to a notification banner. Calls are fire-and-forget so a stalled
+    Shell can never block the editor.
+    """
+
+    def __init__(self, on_key, on_change=lambda: None, bus=None):
+        self.available = False
+        self.on_key, self.on_change = on_key, on_change
+        self._watch = self._signal = 0
+        try:
+            self.bus = bus or Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            self.bus = None
+            return
+        self._watch = Gio.bus_watch_name_on_connection(
+            self.bus, OVERLAY_BUS, Gio.BusNameWatcherFlags.NONE,
+            lambda *_: self._set_available(True), lambda *_: self._set_available(False))
+        self._signal = self.bus.signal_subscribe(
+            OVERLAY_BUS, OVERLAY_IFACE, 'KeyPressed', OVERLAY_PATH, None,
+            Gio.DBusSignalFlags.NONE, self._key_pressed)
+
+    def _set_available(self, available):
+        if available != self.available:
+            self.available = available
+            self.on_change()
+
+    def _key_pressed(self, _bus, _sender, _path, _iface, _signal, params):
+        self.on_key(params.unpack()[0])
+
+    def _call(self, method, params=None):
+        if not self.available or self.bus is None:
+            return False
+        self.bus.call(OVERLAY_BUS, OVERLAY_PATH, OVERLAY_IFACE, method, params, None,
+                      Gio.DBusCallFlags.NO_AUTO_START, 2000, None, None, None)
+        return True
+
+    def show(self, state, title, hint):
+        return self._call('Show', GLib.Variant('(sss)', (state, title, hint)))
+
+    def hide(self):
+        return self._call('Hide')
+
+    def set_keys(self, keys):
+        return self._call('SetKeys', GLib.Variant('(as)', (list(keys),)))
+
+    def set_clipboard(self, text):
+        return self._call('SetClipboard', GLib.Variant('(s)', (text,)))
+
+    def close(self):
+        if self.bus is not None:
+            if self.available:
+                # Release Enter/Esc now rather than when the Shell sees us exit.
+                self.set_keys([])
+                self.hide()
+                self.bus.flush_sync(None)
+            if self._signal:
+                self.bus.signal_unsubscribe(self._signal)
+            if self._watch:
+                Gio.bus_unwatch_name(self._watch)
+        self._signal = self._watch = 0
+        self.available = False
 
 
 class Controller:
@@ -44,8 +142,15 @@ class Controller:
         self.source = store.get_setting('microphone') or None
         self.started_at = self.clock()
         self.dirty = False
+        # Last finished job: 'saved', 'empty' or 'cancelled'; cleared when a new one starts.
+        self.outcome = None
         self.on_draft = lambda draft, append=False: None
         self.on_status = lambda: None
+        # Whether the editor has focus; recordings started elsewhere are copied when done.
+        self.focused = lambda: True
+        self.on_transcript = lambda text: None
+        # Drafts another feature (Clean up) is still writing to.
+        self.locked_drafts = lambda: set()
         last = store.get_setting('last_draft')
         try:
             self.draft = store.get_draft(last) if last else None
@@ -56,8 +161,22 @@ class Controller:
             self.draft = drafts[0] if drafts else store.create_draft()
         self.title, self.content = self.draft.title, self.draft.content
         self.store.set_setting('last_draft', self.draft.id)
+        self.engine_factory = engine_factory
+        self.engine_failed = False
         self.engine = engine_factory(self.receive)
         self.engine.start()
+
+    def restart_engine(self):
+        """Explicit retry after the worker died; never queues a recording."""
+        if self.closed or self.stopping or not self.engine_failed:
+            return False
+        old = self.engine
+        self.engine_failed = False
+        self.spawn(old.close)
+        self.engine = self.engine_factory(self.receive)
+        self.status('loading', 'Restarting model…')
+        self.engine.start()
+        return True
 
     def status(self, state, message):
         self.state, self.message = state, message
@@ -76,7 +195,7 @@ class Controller:
             self.status('loading', 'Loading model…')
         elif kind == 'ready':
             self.ready = True
-            self.status('ready', 'Ready')
+            self.status('ready', self._ready_message())
             for request_id, job in list(self.pending.items()):
                 if not job['submitted'] and not job.get('copying'):
                     self._submit(request_id)
@@ -88,23 +207,61 @@ class Controller:
                 self.flush()
                 draft = self.store.append_transcript(
                     job['draft_id'], event['id'], str(job['path']), event.get('text', ''))
+                # Stored: the job is finished even if showing it fails below.
+                self.pending.pop(event['id'])
+                self._forget_audio(event['id'], job.get('path'))
                 if draft.id == self.draft.id:
                     self.draft = draft
                     self.title, self.content = draft.title, draft.content
                     self.on_draft(draft, append=True)
-                self.pending.pop(event['id'])
-                self.status('ready', 'Ready' if event.get('text') else 'No speech detected')
+                text = event.get('text', '').strip()
+                self.outcome = 'saved' if text else 'empty'
+                if text and job.get('background'):
+                    self.on_transcript(text)
+                self.status('ready', self._ready_message() if text else 'No speech detected')
             except Exception as exc:
                 self.status('error', f'Could not save transcription: {exc}')
         elif kind == 'error':
-            self.pending.pop(event.get('id'), None)
-            if event.get('fatal'):
+            fatal = bool(event.get('fatal'))
+            request_id = event.get('id')
+            if not fatal and request_id is not None and request_id not in self.pending:
+                return False  # a job the user already dropped with Esc
+            job = self.pending.pop(request_id, None)
+            if job:
+                self._forget_audio(request_id, job.get('path'))
+            if fatal:
                 self.ready = False
-                self.pending.clear()
-                self.recording_job = None
+                self.engine_failed = True
+                for dropped in self._drop_jobs():
+                    self._forget_audio(dropped.get('id'), dropped.get('path'))
                 self.spawn(self._cancel_capture)
             self.status('error', event.get('message', 'Transcription failed'))
         return False
+
+    def _drop_jobs(self):
+        jobs = list(self.pending.values())
+        if self.recording_job:
+            jobs.append(self.recording_job)
+        self.pending.clear()
+        self.recording_job = None
+        return jobs
+
+    def _ready_message(self):
+        return f'Ready · {SHORTCUT_LABEL}'
+
+    def _forget_audio(self, request_id, path=None):
+        stored = None
+        try:
+            stored = self.store.forget_audio(request_id)
+        except Exception:
+            stored = None
+        for candidate in (stored, path):
+            if not candidate:
+                continue
+            try:
+                Path(candidate).unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _submit(self, request_id):
         job = self.pending[request_id]
@@ -218,22 +375,32 @@ class Controller:
         if self.recording:
             self.stop_recording()
             return True
+        if self.engine_failed:
+            self.restart_engine()
+            return False
         if not self.ready or self.pending or self.recording_job:
+            return False
+        # A cancelled capture may still be finalizing on its thread.
+        if not self._recorder_lock.acquire(blocking=False):
             return False
         request_id = uuid.uuid4().hex
         path = self.data_dir / 'recordings' / (request_id + '.wav')
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             self.recorder.start(path, target=self.source)
             self.recording_job = {
                 'id': request_id, 'draft_id': self.draft.id, 'path': path,
-                'submitted': False, 'started_at': self.clock()}
+                'submitted': False, 'started_at': self.clock(),
+                'background': not self.focused()}
+            self.outcome = None
             self.status('recording', 'Recording')
             return True
         except Exception as exc:
             self.recorder.cancel()
             self.status('error', f'Could not record: {exc}')
             return False
+        finally:
+            self._recorder_lock.release()
 
     def stop_recording(self):
         if not self.recording:
@@ -267,6 +434,31 @@ class Controller:
             self._submit(job['id'])
         return False
 
+    def cancel_recording(self):
+        if self.closed or self.stopping:
+            return False
+        cancelled = False
+        if self.recording_job:
+            job = self.recording_job
+            self.recording_job = None
+            self.spawn(self._cancel_capture)
+            if job:
+                try:
+                    Path(job['path']).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            cancelled = True
+        if self.pending:
+            jobs = list(self.pending.values())
+            self.pending.clear()
+            for job in jobs:
+                self._forget_audio(job.get('id'), job.get('path'))
+            cancelled = True
+        if cancelled:
+            self.outcome = 'cancelled'
+            self.status('ready', self._ready_message() if self.ready else 'Loading model…')
+        return cancelled
+
     def tick(self):
         if self.recording and (
                 not self.recorder.running or
@@ -298,6 +490,26 @@ class Controller:
         self.flush()
         self._select(self.store.get_draft(draft_id))
 
+    def delete_draft(self, draft_id):
+        """Delete a draft unless a recording or transcript is headed for it."""
+        busy = [job for job in list(self.pending.values()) + [self.recording_job]
+                if job and job.get('draft_id') == draft_id]
+        if busy:
+            raise RuntimeError('This draft is waiting for a transcript; finish or cancel it first')
+        if draft_id in self.locked_drafts():
+            raise RuntimeError('This draft is being cleaned up; wait or press Esc first')
+        if draft_id == self.draft.id:
+            self.dirty = False  # its unsaved edits go with it
+        for path in self.store.delete_draft(draft_id):
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        if draft_id == self.draft.id:
+            drafts = self.store.list_drafts()
+            self._select(drafts[0] if drafts else self.store.create_draft())
+        return True
+
     def _cancel_capture(self):
         with self._recorder_lock:
             self.recorder.cancel()
@@ -320,8 +532,7 @@ class Controller:
         # A refused close releases owned processes, not the unsaved editor/store.
         self.stopping = True
         self.ready = False
-        self.pending.clear()
-        self.recording_job = None
+        unfinished = [job.get('path') for job in self._drop_jobs()]
         if save_error:
             self.status(
                 'error',
@@ -340,6 +551,12 @@ class Controller:
                 try:
                     finish()
                 except Exception as exc:
+                    errors.append(str(exc))
+            for path in unfinished:
+                try:
+                    if path:
+                        Path(path).unlink(missing_ok=True)
+                except OSError as exc:
                     errors.append(str(exc))
             self.dispatch(self._closed, errors)
         if not self._cleanup_started:
@@ -361,12 +578,19 @@ class Controller:
 
 
 class ScratchpadWindow(Adw.ApplicationWindow):
-    def __init__(self, app, controller, sources_provider):
-        super().__init__(application=app, title='Dogspeak', default_width=900,
-                         default_height=680)
+    def __init__(self, app, controller, sources_provider, cleanup=None):
+        super().__init__(application=app, title='Dogspeak', default_width=1100,
+                         default_height=720)
         self.controller = controller
         self.rendering, self.save_source, self.closing = False, 0, False
-        self.drafts_dialog = self.save_error_dialog = None
+        self.drafts_dialog = self.save_error_dialog = self.settings_dialog = None
+        if cleanup is None:
+            from .cleanup import Cleanup
+            from .credentials import Keyring
+            cleanup = Cleanup(controller, Keyring())
+        from .cleanup_ui import CleanupView
+        self.cleanup = cleanup
+        self.cleanup_view = CleanupView(self, cleanup)
         self.displayed_draft = None
         layout = Adw.ToolbarView()
         self.set_content(layout)
@@ -382,17 +606,25 @@ class ScratchpadWindow(Adw.ApplicationWindow):
             header.pack_start(Gtk.Button(icon_name=icon, action_name='app.' + action,
                                          tooltip_text=tooltip))
         self.record_button = Gtk.Button(action_name='app.toggle-recording',
-                                        tooltip_text='Record / stop (Ctrl+Shift+R)')
+                                        tooltip_text=f'Record / stop ({SHORTCUT_LABEL})')
         record_box = Gtk.Box(spacing=6)
         self.record_icon = Gtk.Image(icon_name='media-record-symbolic')
         self.record_label = Gtk.Label(label='Record')
         record_box.append(self.record_icon)
         record_box.append(self.record_label)
         self.record_button.set_child(record_box)
+        menu = Gio.Menu()
+        menu.append('Settings', 'app.settings')
+        menu.append('Quit', 'app.quit')
+        header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu,
+                                       tooltip_text='Main menu', primary=True))
         header.pack_end(self.record_button)
+        header.pack_end(self.cleanup_view.panel_button)
         header.pack_end(Gtk.Button(icon_name='edit-copy-symbolic', action_name='app.copy-all',
                                    tooltip_text='Copy all (Ctrl+Shift+C)'))
         layout.add_top_bar(header)
+        layout.add_top_bar(self.cleanup_view.bar)
+        layout.add_top_bar(self.cleanup_view.banner)
         self.buffer = Gtk.TextBuffer()
         self.buffers = {}
         self.buffer.set_enable_undo(True)
@@ -403,7 +635,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.editor.add_css_class('view')
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         scroll.set_child(self.editor)
-        layout.set_content(scroll)
+        content = Gtk.Box()
+        scroll.set_hexpand(True)
+        content.append(scroll)
+        content.append(self.cleanup_view.panel)
+        layout.set_content(content)
         status = Gtk.Box(spacing=10, margin_start=16, margin_end=16,
                          margin_top=10, margin_bottom=10)
         self.spinner = Gtk.Spinner()
@@ -425,10 +661,13 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.title_entry.connect('changed', self._changed)
         self.controller.on_draft = self.render_draft
         self.controller.on_status = self.render_status
-        self.render_draft(controller.draft)
-        self.render_status()
-        self.tick_source = GLib.timeout_add(200, controller.tick)
+        self.set_hide_on_close(True)
         self.connect('close-request', self._close_requested)
+        self._install_session_keys(self)
+        self._init_overlay(app)
+        self.render_draft(controller.draft)
+        self.cleanup_view.refresh()
+        self.tick_source = GLib.timeout_add(200, controller.tick)
         # pw-dump may block; discovery cannot stall the editor or model events.
         def discover():
             try:
@@ -478,6 +717,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
     def _autosave(self):
         self.save_source = 0
         self.perform(self.controller.flush)
+        self.cleanup_view.refresh()  # the shown version follows undo and typing
         return False
 
     def render_draft(self, draft, append=False):
@@ -519,6 +759,22 @@ class ScratchpadWindow(Adw.ApplicationWindow):
             self.rendering = False
         if switching:
             self.editor.grab_focus()
+            if getattr(self, 'cleanup_view', None) is not None:
+                self.cleanup_view.refresh()
+
+    def replace_text(self, draft_id, text):
+        """Swap a draft's whole text as one undoable step (Ctrl+Z brings it back)."""
+        buffer = self.buffers.get(draft_id)
+        if buffer is None:
+            return
+        self.rendering = True
+        try:
+            buffer.begin_user_action()
+            buffer.delete(buffer.get_start_iter(), buffer.get_end_iter())
+            buffer.insert(buffer.get_start_iter(), text)
+            buffer.end_user_action()
+        finally:
+            self.rendering = False
 
     def render_status(self):
         c = self.controller
@@ -532,13 +788,23 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         recording = c.recording
         self.record_label.set_text('Stop' if recording else 'Record')
         self.record_icon.set_from_icon_name('media-playback-stop-symbolic' if recording else 'media-record-symbolic')
-        self.record_button.set_sensitive(not c.closed and (recording or (
+        self.record_button.set_sensitive(not c.closed and (recording or c.engine_failed or (
             c.ready and not c.pending and not c.recording_job)))
         self.microphone.set_sensitive(not recording and not c.recording_job)
         if recording:
             self.record_button.add_css_class('destructive-action')
         else:
             self.record_button.remove_css_class('destructive-action')
+        cleanup = getattr(self, 'cleanup', None)
+        if cleanup is not None:
+            self.cleanup_view.clean_button.set_sensitive(cleanup.can_start())
+            # Clean up doesn't need the speech model, so it outranks "Loading model…".
+            if cleanup.busy and not (c.recording or c.state == 'transcribing'):
+                from .llm import provider_name
+                name = provider_name(cleanup.busy['config']['base_url'])
+                self.status_label.set_text(f'Sending this draft to {name}… Esc cancels.')
+                self.spinner.set_spinning(True)
+        self._sync_overlay()
 
     def show_drafts(self):
         self.controller.flush()
@@ -559,6 +825,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
                 dialog.close()
                 self.editor.grab_focus()
             row.connect('activated', select)
+            delete = Gtk.Button(icon_name='user-trash-symbolic', valign=Gtk.Align.CENTER,
+                                tooltip_text='Delete draft')
+            delete.add_css_class('flat')
+            delete.connect('clicked', lambda _b, d=draft, r=row: self.confirm_delete(d, r))
+            row.add_suffix(delete)
             rows.append(row)
         scroll = Gtk.ScrolledWindow(vexpand=True)
         scroll.set_child(rows)
@@ -566,9 +837,49 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         dialog.set_child(box)
         dialog.present(self)
 
+    def show_settings(self):
+        from .cleanup_ui import present_settings
+        self.present()
+        return present_settings(self, self.cleanup)
+
+    def confirm_delete(self, draft, row=None):
+        title = draft.title or 'Untitled'
+        alert = Adw.AlertDialog(heading=f'Delete “{title}”?',
+                                body='The draft and its saved transcripts are removed. This cannot be undone.')
+        alert.add_response('cancel', 'Cancel')
+        alert.add_response('delete', 'Delete')
+        alert.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE)
+        alert.set_default_response('cancel')
+        alert.set_close_response('cancel')
+
+        def respond(_alert, response):
+            if response == 'delete':
+                self.delete_draft(draft.id, row)
+        alert.connect('response', respond)
+        alert.present(self)
+        return alert
+
+    def delete_draft(self, draft_id, row=None):
+        displayed = self.displayed_draft
+        if self.perform(lambda: self.controller.delete_draft(draft_id)):
+            self.buffers.pop(draft_id, None)
+            if displayed == draft_id:
+                self.displayed_draft = None
+                self.render_draft(self.controller.draft)
+            if row is not None and row.get_parent() is not None:
+                row.get_parent().remove(row)
+            return True
+        self.render_status()
+        return False
+
     def copy_all(self):
-        self.get_clipboard().set(self.buffer.get_text(
-            self.buffer.get_start_iter(), self.buffer.get_end_iter(), True))
+        text = self.buffer.get_text(self.buffer.get_start_iter(), self.buffer.get_end_iter(), True)
+        # From the tray menu the window is unfocused, and Wayland ignores its selection.
+        shell = getattr(self, 'shell', None)
+        if not self.is_active() and shell is not None and shell.available:
+            shell.set_clipboard(text)
+        else:
+            self.get_clipboard().set(text)
 
     def _pause_window(self):
         self.closing = True
@@ -610,25 +921,249 @@ class ScratchpadWindow(Adw.ApplicationWindow):
             self.copy_all()
         elif response == 'discard':
             self._pause_window()
-            self.controller.discard(done=self.destroy)
+            self.controller.discard(done=self._destroyed)
+
+    def _destroyed(self):
+        # Ask before destroy(): a destroyed window no longer has an application,
+        # and the app holds itself open for the hidden window.
+        app = self.get_application()
+        self._destroy_overlay()
+        self.destroy()
+        if app is not None:
+            app.quit()
+
+    def handle_session_key(self, keyval):
+        if self.get_visible_dialog() is not None:
+            return False  # Esc closes the dialog; it must not drop a transcript
+        if keyval == Gdk.KEY_Escape and self.cleanup.busy and not self.controller.recording_job:
+            return self.cleanup.cancel()
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if self.controller.recording:
+                self.controller.stop_recording()
+                return True
+            return False
+        if keyval == Gdk.KEY_Escape:
+            return bool(self.controller.cancel_recording())
+        return False
+
+    def _on_session_key(self, _controller, keyval, _keycode, _state):
+        return self.handle_session_key(keyval)
+
+    def _install_session_keys(self, widget):
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect('key-pressed', self._on_session_key)
+        widget.add_controller(keys)
+
+    def overlay_notify(self, title, body, resident):
+        app = self.get_application()
+        if app is None:
+            return
+        if not title:
+            app.withdraw_notification('status')
+            return
+        note = Gio.Notification.new(title)
+        if body:
+            note.set_body(body)
+        note.set_icon(Gio.ThemedIcon.new('audio-input-microphone-symbolic'))
+        note.set_priority(
+            Gio.NotificationPriority.URGENT if resident else Gio.NotificationPriority.NORMAL)
+        app.send_notification('status', note)
+
+    def _init_overlay(self, _app):
+        self.overlay = OverlayStatus()
+        self.overlay_label = self.overlay
+        self._overlay_hide = 0
+        self._overlay_sent = self._overlay_keys = self._overlay_noted = None
+        self._copied = self._announce_ready = False
+        self.shell = ShellOverlay(self._overlay_key, self._shell_changed)
+        self.controller.focused = lambda: self.get_visible() and self.is_active()
+        self.controller.on_transcript = self._copy_transcript
+        self.connect('destroy', self._destroy_overlay)
+
+    def toggle_recording(self):
+        c = self.controller
+        if c.toggle_recording():
+            return True
+        # A refused global shortcut must say why; the editor may be hidden.
+        if not self.is_active():
+            if c.state == 'error':
+                self._overlay_flash('error', c.message, '', 4000)
+            elif c.state == 'loading' and c.message.startswith('Restarting'):
+                self._announce_ready = True
+                self._overlay_flash('info', 'Restarting the model…', 'Try again in a moment', 2500)
+            elif not c.ready:
+                self._announce_ready = True
+                self._overlay_flash('info', 'Dogspeak is loading…', 'Try again in a moment', 2500)
+            elif c.pending or c.recording_job:
+                self._overlay_flash('info', 'Still transcribing', 'Esc drops it', 2000)
+            else:
+                self._overlay_flash('info', 'Finishing the last recording', 'Try again in a moment', 1500)
+        return False
+
+    def _stop_hint(self):
+        if self.shell.available:
+            return 'Enter stops · Esc cancels'
+        return f'{SHORTCUT_LABEL} stops' + (' · Esc cancels' if self.is_active() else '')
+
+    def _overlay_target(self):
+        c = self.controller
+        if c.recording:
+            elapsed = int(max(0, c.clock() - c.recording_job['started_at']))
+            return 'recording', 'Recording', f'{elapsed // 60}:{elapsed % 60:02}', self._stop_hint()
+        if c.state == 'transcribing' and (c.pending or c.recording_job):
+            return 'transcribing', c.message, '', 'Esc drops this result'
+        return None
+
+    def _sync_overlay(self):
+        overlay = getattr(self, 'overlay', None)
+        if overlay is None:
+            return
+        c = self.controller
+        if c.closed:
+            self._hide_overlay()
+            return
+        target = self._overlay_target()
+        if target:
+            self._cancel_overlay_timer()
+            self._overlay_set(*target)
+        elif overlay.state in ('recording', 'transcribing'):
+            # The job just ended; say how, briefly.
+            if c.state == 'error':
+                self._overlay_flash('error', c.message, '', 4000)
+            elif c.outcome == 'saved':
+                hint = 'Copied · paste with Ctrl+V' if self._copied else 'Added to the draft'
+                self._overlay_flash('saved', 'Saved', hint, 2000)
+            elif c.outcome == 'empty':
+                self._overlay_flash('info', 'No speech detected', '', 2000)
+            elif c.outcome == 'cancelled':
+                self._overlay_flash('info', 'Cancelled', '', 1200)
+            else:
+                self._hide_overlay()
+            self._copied = False
+        elif self._announce_ready and c.ready:
+            self._announce_ready = False
+            self._overlay_flash('info', 'Dogspeak is ready', f'{SHORTCUT_LABEL} to record', 2500)
+
+    def _overlay_set(self, state, text, detail, hint):
+        overlay = self.overlay
+        overlay.set_visible(True)
+        overlay.set_text(text)
+        overlay.state, overlay.detail, overlay.hint = state, detail, hint
+        self._publish_overlay()
+
+    def _overlay_flash(self, state, text, hint, milliseconds):
+        if getattr(self, 'overlay', None) is None:
+            return
+        self._cancel_overlay_timer()
+        self._overlay_set(state, text, '', hint)
+        self._overlay_hide = GLib.timeout_add(milliseconds, self._hide_overlay)
+
+    def _cancel_overlay_timer(self):
+        if self._overlay_hide:
+            GLib.source_remove(self._overlay_hide)
+            self._overlay_hide = 0
+
+    def _hide_overlay(self):
+        self._overlay_hide = 0
+        overlay = getattr(self, 'overlay', None)
+        if overlay is not None:
+            overlay.set_visible(False)
+            self._publish_overlay()
+        return False
+
+    def _publish_overlay(self):
+        overlay = self.overlay
+        visible = overlay.get_visible()
+        shown = (visible, overlay.state, overlay.get_text(), overlay.detail, overlay.hint)
+        keys = {'recording': ('stop', 'cancel'), 'transcribing': ('cancel',)}.get(
+            overlay.state, ()) if visible else ()
+        if self.shell.available:
+            if shown != self._overlay_sent:
+                if visible:
+                    title = f'{overlay.get_text()}  {overlay.detail}'.strip()
+                    self.shell.show(overlay.state, title, overlay.hint)
+                else:
+                    self.shell.hide()
+            if keys != self._overlay_keys:
+                self.shell.set_keys(keys)
+            self._overlay_sent, self._overlay_keys = shown, keys
+            return
+        # Banner fallback: no ticking timer, or GNOME would re-announce every second.
+        noted = shown[:3] + shown[4:]
+        if noted != self._overlay_noted:
+            self._overlay_noted = noted
+            if visible:
+                self.overlay_notify(overlay.get_text(), overlay.hint,
+                                    overlay.state in ('recording', 'transcribing'))
+            else:
+                self.overlay_notify('', '', False)
+
+    def _shell_changed(self):
+        # The extension appeared or went away: resend everything to whichever is live now.
+        self._overlay_sent = self._overlay_keys = None
+        if self.shell.available and self._overlay_noted and self._overlay_noted[0]:
+            self.overlay_notify('', '', False)
+        self._overlay_noted = None
+        if getattr(self, 'overlay', None) is not None:
+            self._publish_overlay()
+
+    def _overlay_key(self, key):
+        c = self.controller
+        if key == 'stop' and c.recording:
+            self.perform(c.stop_recording)
+        elif key == 'cancel':
+            self.perform(c.cancel_recording)
+        self.render_status()
+
+    def _copy_transcript(self, text):
+        if self.shell.available:
+            self._copied = self.shell.set_clipboard(text)
+        else:
+            # Best effort: Wayland may ignore a selection set by an unfocused client.
+            self.get_clipboard().set(text)
+            self._copied = False
+
+    def _destroy_overlay(self, *_):
+        if getattr(self, 'overlay', None) is None:
+            return
+        self._cancel_overlay_timer()
+        self.overlay_notify('', '', False)
+        self.shell.close()
+        self.overlay = None
+
+    def quit_session(self):
+        if self.closing:
+            return
+        self._pause_window()
+        if not self.controller.close(done=self._destroyed):
+            self._resume_window()
+            self._show_save_error()
 
     def _close_requested(self, *_):
         if self.closing:
             return True
-        self._pause_window()
-        if not self.controller.close(done=self.destroy):
-            self._resume_window()
+        try:
+            self.controller.flush()
+        except Exception as exc:
+            self.controller.status(
+                'error',
+                f'Could not save draft: {exc}. Draft kept open; retry saving or copy the text before discarding.')
             self._show_save_error()
+            return True
+        self.set_visible(False)
         return True
 
 
 class DogspeakApplication(Adw.Application):
-    def __init__(self, controller_factory=None, sources_provider=None, **kwargs):
+    def __init__(self, controller_factory=None, sources_provider=None, cleanup_factory=None,
+                 **kwargs):
         kwargs.setdefault('flags', Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         super().__init__(application_id=APP_ID, **kwargs)
         self.window = None
         self.controller_factory = controller_factory or self._make_controller
         self.sources_provider = sources_provider
+        self.cleanup_factory = cleanup_factory
         self.add_main_option('toggle-recording', 0, GLib.OptionFlags.NONE,
                              GLib.OptionArg.NONE, 'Toggle recording in the running scratchpad', None)
         self.add_main_option('import-audio', 0, GLib.OptionFlags.NONE,
@@ -648,11 +1183,21 @@ class DogspeakApplication(Adw.Application):
         Adw.Application.do_startup(self)
         if GLib.get_application_name() != 'Dogspeak':
             GLib.set_application_name('Dogspeak')
+        # Run from the checkout, the icon is found here; installed, in the user theme.
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.IconTheme.get_for_display(display).add_search_path(str(ROOT / 'data' / 'icons'))
+        Gtk.Window.set_default_icon_name(APP_ID)
+        self.hold()
         for name, parameter, callback in [
-            ('toggle-recording', None, lambda: self.window.controller.toggle_recording()),
+            ('toggle-recording', None, lambda: self.window.toggle_recording()),
             ('new-draft', None, lambda: self.window.controller.new_draft()),
             ('open-draft', None, lambda: self.window.show_drafts()),
             ('copy-all', None, lambda: self.window.copy_all()),
+            ('quit', None, lambda: self.window.quit_session()),
+            ('clean-up', None, lambda: self.window.cleanup.start()),
+            ('settings', None, lambda: self.window.show_settings()),
+            ('show-window', None, lambda: self.window.present()),
         ]:
             action = Gio.SimpleAction.new(name, parameter)
             action.connect('activate', lambda _a, _p, cb=callback: self._action(cb))
@@ -662,29 +1207,39 @@ class DogspeakApplication(Adw.Application):
             lambda: self.window.controller.import_audio(path.get_string())))
         self.add_action(action)
         for name, accelerators in {
-            'toggle-recording': ['<Control><Shift>r'], 'new-draft': ['<Control>n'],
+            'toggle-recording': ['<Super>r', '<Control><Shift>r'], 'new-draft': ['<Control>n'],
             'open-draft': ['<Control>o'], 'copy-all': ['<Control><Shift>c'],
+            'quit': ['<Control>q'], 'clean-up': ['<Control><Shift>l'],
+            'settings': ['<Control>comma'],
         }.items():
             self.set_accels_for_action('app.' + name, accelerators)
 
     def _action(self, callback):
-        self.do_activate()
+        if self.window is None:
+            self._ensure_window()
         self.window.perform(callback)
 
-    def do_activate(self):
+    def _ensure_window(self):
         if self.window is None:
             sources = self.sources_provider
             if sources is None:
                 from .audio import list_sources
                 sources = list_sources
-            self.window = ScratchpadWindow(self, self.controller_factory(), sources)
-        self.window.present()
+            controller = self.controller_factory()
+            cleanup = self.cleanup_factory(controller) if self.cleanup_factory else None
+            self.window = ScratchpadWindow(self, controller, sources, cleanup)
+        return self.window
+
+    def do_activate(self):
+        self._ensure_window().present()
 
     def do_command_line(self, command_line):
-        self.do_activate()
+        self._ensure_window()
         options = command_line.get_options_dict()
         if options.contains('toggle-recording'):
             self.activate_action('toggle-recording', None)
+        else:
+            self.do_activate()
         if options.contains('import-audio'):
             raw = options.lookup_value('import-audio', None).unpack()
             # G_OPTION_ARG_FILENAME is an ay variant including its C terminator.
@@ -693,6 +1248,25 @@ class DogspeakApplication(Adw.Application):
             path = command_line.create_file_for_arg(path).get_path()
             self.activate_action('import-audio', GLib.Variant('s', path))
         return 0
+
+    def do_shutdown(self):
+        window = self.window
+        if window is not None:
+            controller = window.controller
+            try:
+                controller.flush()
+            except Exception:
+                pass
+            if not controller.closed:
+                controller.spawn = lambda fn: fn()
+                controller.dispatch = lambda fn, *args: fn(*args)
+                controller.close()
+            else:
+                try:
+                    controller.engine.close()
+                except Exception:
+                    pass
+        Adw.Application.do_shutdown(self)
 
 
 def main(argv=None):

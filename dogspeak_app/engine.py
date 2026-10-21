@@ -79,7 +79,7 @@ class EngineClient:
             if not self._closing and not fatal_received:
                 message = failure or f"Inference worker exited unexpectedly (status {status})"
                 self.callback({"type": "error", "id": None, "fatal": True,
-                               "message": f"{message}; restart Dogspeak. See log: {self.log_path}"})
+                               "message": f"{message}; press Record to restart it. See log: {self.log_path}"})
 
     def _send(self, message):
         with self._write_lock:

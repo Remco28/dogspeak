@@ -9,7 +9,7 @@ environment, model weights, recordings, databases or personal transcripts.
 ## Native desktop prerequisites
 
 The GUI uses distro Python and PyGObject; it does not import the ASR packages.
-On this Ubuntu machine, `python3-gi`, `gir1.2-gtk-4.0` and `gir1.2-adw-1` were
+On this Ubuntu machine, `python3-gi`, `gir1.2-gtk-4.0`, `gir1.2-adw-1` and `gir1.2-secret-1` (keyring access for the Clean up API key) were
 already installed. PipeWire tools `pw-record` and `pw-dump` provide capture and
 microphone discovery. No GTK package was installed or upgraded for this app.
 Check a fresh machine before installing its distro equivalents:
@@ -36,6 +36,8 @@ uv sync --frozen
 CPU-only wheel index; CUDA packages are not needed. The upstream model card
 omits `librosa`, which the current Transformers Parakeet feature extractor
 requires; it is included here. The private `.venv` does not need pip.
+The `anthropic` SDK is also pinned there; only the optional Claude provider for
+Clean up uses it (`dogspeak_app/claude.py`), never dictation.
 
 ## Model and offline processor assets
 

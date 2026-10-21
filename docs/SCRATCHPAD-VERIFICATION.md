@@ -60,7 +60,7 @@ ordinary use selects the user's desired microphone or System default.
 
 The per-user `.desktop` launcher was installed and passed
 `desktop-file-validate`. Its contents were read back. The existing GNOME custom
-shortcut list was unchanged; Super+Shift+D registration is opt-in through
+shortcut list was unchanged; Super+Shift+D (since changed to Super+R) registration is opt-in through
 `desktop_install.py --shortcut`. App-local actions/shortcuts and remote command
 forwarding were tested; an actual GNOME global keypress was not claimed.
 
@@ -69,3 +69,32 @@ engine. Further daily use is still needed to judge vocabulary, corrections,
 UI ergonomics, and recording from their preferred physical microphone. No
 LLM prompt cleanup, cloud request, startup service or automatic text sending
 is included in this first scratchpad.
+
+## Later additions (2026-10-21)
+
+Each was exercised with the real app inside an isolated, headless GNOME Shell
+50 session (its own D-Bus and settings, never the user's desktop), using the
+real model worker where speech was involved and public speech played into a
+temporary PipeWire loopback source.
+
+- **Overlay pill:** drawn above a fullscreen app that kept focus; Enter
+  stopped the recording without reaching that app; Esc cancelled; the
+  transcript was appended and copied; the Shell released Enter/Esc when the
+  job ended and again when the client process exited.
+  [Screenshot](overlay.png).
+- **Top-bar menu:** appears while the app runs; Start/Stop recording, Copy all,
+  Show and Quit all drive the real app; the icon turns red/amber while
+  recording/transcribing. [Screenshot](tray.png). Quit was found not to exit
+  the process (fixed, with a regression test).
+- **Clean up:** against a local stand-in for an OpenAI-compatible provider,
+  the request carried the purpose and fenced draft, the text was replaced as
+  one undoable step, versions and suggestions appeared, and the layout matched
+  the reviewed mockup. The real GNOME keyring stored, returned and cleared a
+  throwaway key.
+- **Claude provider:** the official `anthropic` SDK was exercised against a
+  local stand-in API: structured output, low effort, refusal fallback on the
+  larger models, model lookup for the free test, and plain-language errors.
+
+Not yet verified: output quality from a real language model (no API key was
+available during development), and the overlay/top-bar extension on the
+user's own session before the post-install logout and login.

@@ -52,6 +52,58 @@ class DesktopTests(unittest.TestCase):
             destination = desktop_install.install_entry(root, Path(tmp) / 'data')
             self.assertEqual(destination, Path(tmp) / 'data/applications/io.github.Remco28.Dogspeak.desktop')
             self.assertIn(str(launcher), destination.read_text())
+            self.assertIn('Icon=io.github.Remco28.Dogspeak\n', destination.read_text())
+
+    def test_icons_install_at_every_size_in_the_user_theme(self):
+        import desktop_install
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            icons = desktop_install.install_icons(ROOT, tmp)
+            sizes = sorted(int(p.parts[-3].split('x')[0]) for p in icons)
+            self.assertEqual(sizes, [16, 24, 32, 48, 64, 128, 256, 512])
+            for icon in icons:
+                self.assertEqual(icon.name, 'io.github.Remco28.Dogspeak.png')
+                self.assertTrue(str(icon).startswith(str(Path(tmp) / 'icons/hicolor')))
+                self.assertEqual(icon.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
+
+    def test_overlay_install_is_user_scoped_and_replaces_old_copies(self):
+        import tempfile
+        import desktop_install
+        with tempfile.TemporaryDirectory() as tmp:
+            target = desktop_install.install_overlay(ROOT, tmp)
+            self.assertEqual(target, Path(tmp) / "gnome-shell/extensions" / desktop_install.OVERLAY_UUID)
+            (target / "stale.js").write_text("old")
+            target = desktop_install.install_overlay(ROOT, tmp)
+            self.assertFalse((target / "stale.js").exists())
+            for name in ("metadata.json", "extension.js", "stylesheet.css"):
+                self.assertTrue((target / name).is_file(), name)
+            import json
+            self.assertEqual(json.loads((target / "metadata.json").read_text())["uuid"],
+                             desktop_install.OVERLAY_UUID)
+
+    def test_overlay_enable_keeps_other_extensions(self):
+        import desktop_install
+
+        class Shell:
+            def __init__(self):
+                self.values = {"enabled-extensions": ["dock@x"],
+                               "disabled-extensions": [desktop_install.OVERLAY_UUID, "y@z"]}
+
+            def get_strv(self, key):
+                return list(self.values[key])
+
+            def set_strv(self, key, value):
+                self.values[key] = list(value)
+                return True
+
+            def get_boolean(self, key):
+                return False
+
+        shell = Shell()
+        self.assertIsNone(desktop_install.enable_overlay(shell))
+        self.assertIsNone(desktop_install.enable_overlay(shell))
+        self.assertEqual(shell.values["enabled-extensions"], ["dock@x", desktop_install.OVERLAY_UUID])
+        self.assertEqual(shell.values["disabled-extensions"], ["y@z"])
 
     def test_shortcut_preserves_existing_bindings_and_is_idempotent(self):
         import desktop_install
@@ -68,13 +120,35 @@ class DesktopTests(unittest.TestCase):
             desktop_install.configure_shortcut(ROOT, settings, binding_factory)
         self.assertEqual(settings.get_strv('custom-keybindings'), ['/existing/', desktop_install.SHORTCUT_PATH])
         self.assertEqual(bindings['/existing/'].get_string('binding'), '<Control>space')
-        self.assertEqual(bindings[desktop_install.SHORTCUT_PATH].get_string('binding'), '<Super><Shift>d')
+        self.assertEqual(bindings[desktop_install.SHORTCUT_PATH].get_string('binding'), '<Super>r')
         self.assertIn('--toggle-recording', bindings[desktop_install.SHORTCUT_PATH].get_string('command'))
         settings.values['custom-keybindings'] = ['/existing/']
-        bindings['/existing/'].values['binding'] = '<Super><Shift>d'
+        bindings['/existing/'].values['binding'] = '<Super>R'
         with self.assertRaisesRegex(RuntimeError, 'already'):
             desktop_install.configure_shortcut(ROOT, settings, binding_factory)
         self.assertEqual(settings.get_strv('custom-keybindings'), ['/existing/'])
+        # GNOME Settings stores gtk_accelerator_name() order, e.g. <Shift><Control>r.
+        for spelling in ('<Shift><Control>r', '<Primary><Shift>R', '<Ctrl><Shift>r'):
+            bindings['/existing/'].values['binding'] = spelling
+            with self.subTest(spelling=spelling), self.assertRaisesRegex(RuntimeError, 'already'):
+                desktop_install.configure_shortcut(ROOT, settings, binding_factory, binding='<Control><Shift>r')
+            self.assertEqual(settings.get_strv('custom-keybindings'), ['/existing/'])
+        bindings['/existing/'].values['binding'] = '<Super><Shift>r'
+        desktop_install.configure_shortcut(ROOT, settings, binding_factory)
+
+    def test_reinstall_moves_an_old_dogspeak_binding_to_super_r(self):
+        import desktop_install
+        class Settings:
+            def __init__(self, **values): self.values = values
+            def get_strv(self, key): return list(self.values.get(key, []))
+            def set_strv(self, key, value): self.values[key] = list(value); return True
+            def get_string(self, key): return self.values.get(key, '')
+            def set_string(self, key, value): self.values[key] = value; return True
+        settings = Settings(**{'custom-keybindings': [desktop_install.SHORTCUT_PATH]})
+        own = Settings(name='Dogspeak', binding='<Control><Shift>r', command='old')
+        desktop_install.configure_shortcut(ROOT, settings, lambda path: own)
+        self.assertEqual(own.get_string('binding'), '<Super>r')
+        self.assertEqual(settings.get_strv('custom-keybindings'), [desktop_install.SHORTCUT_PATH])
 
 
 if __name__ == "__main__":

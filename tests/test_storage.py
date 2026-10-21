@@ -10,7 +10,7 @@ import unittest
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir=os.environ["TMPDIR"])
+        self.temp = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "data" / "drafts.sqlite3"
 
@@ -20,6 +20,47 @@ class StoreTests(unittest.TestCase):
         store = Store(self.path)
         self.addCleanup(store.close)
         return store
+
+    def test_versions_keep_the_newest_twenty_and_track_dismissed_suggestions(self):
+        from dogspeak_app.storage import VERSION_LIMIT
+
+        store = self.open_store()
+        draft, other = store.create_draft(), store.create_draft()
+        first = store.add_version(draft.id, "v0", "Original")
+        cleaned = store.add_version(draft.id, "v1", "Clean up · Essay", ["a", "b", "c"])
+        store.add_version(other.id, "elsewhere", "Original")
+        store.dismiss_suggestion(cleaned, 1)
+        store.dismiss_suggestion(cleaned, 1)
+        store.dismiss_suggestion(999, 0)
+        versions = store.list_versions(draft.id)
+        self.assertEqual([v["content"] for v in versions], ["v0", "v1"])
+        self.assertEqual(versions[1]["suggestions"], [(0, "a"), (2, "c")])
+        self.assertEqual(versions[0]["id"], first)
+        for n in range(2, VERSION_LIMIT + 5):
+            store.add_version(draft.id, f"v{n}", "Your edits")
+        versions = store.list_versions(draft.id)
+        self.assertEqual(len(versions), VERSION_LIMIT)
+        self.assertEqual(versions[-1]["content"], f"v{VERSION_LIMIT + 4}")
+        self.assertEqual(len(store.list_versions(other.id)), 1)
+        with self.assertRaises(KeyError):
+            store.add_version("missing", "x", "Original")
+        store.delete_draft(draft.id)
+        self.assertEqual(store.list_versions(draft.id), [])
+        self.assertEqual(len(store.list_versions(other.id)), 1)
+
+    def test_delete_draft_removes_it_and_its_segments_only(self):
+        store = self.open_store()
+        keep, gone = store.create_draft("Keep"), store.create_draft("Gone")
+        store.append_transcript(keep.id, "k1", "", "kept text")
+        store.append_transcript(gone.id, "g1", "/tmp/old.wav", "gone text")
+        self.assertEqual(store.delete_draft(gone.id), ["/tmp/old.wav"])
+        self.assertEqual([d.id for d in store.list_drafts()], [keep.id])
+        self.assertEqual(store.list_segments(gone.id), [])
+        self.assertEqual(len(store.list_segments(keep.id)), 1)
+        with self.assertRaises(KeyError):
+            store.delete_draft(gone.id)
+        store.close()
+        self.assertEqual([d.id for d in self.open_store().list_drafts()], [keep.id])
 
     def test_created_drafts_survive_reopen(self):
         from dogspeak_app.storage import Draft
@@ -42,10 +83,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reopened.get_draft(second.id), second)
         self.assertEqual(reopened.list_drafts(), [second, first])
 
-    def test_saves_preserve_content_history_without_duplicate_autosaves(self):
+    def test_saves_do_not_keep_content_version_history(self):
         store = self.open_store()
         draft = store.create_draft("Original title")
-        self.assertEqual(store.list_revisions(draft.id), [])
         original = "  Typed text\n\nwith whitespace  \n"
         saved = store.save_draft(draft.id, original)
         self.assertEqual(saved.content, original)
@@ -55,15 +95,11 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(renamed.title, "New title")
         cleared = store.save_draft(draft.id, "")
         self.assertEqual(cleared.content, "")
-        rows = store.list_revisions(draft.id)
-        self.assertTrue(all(isinstance(row, dict) for row in rows))
-        self.assertEqual([row["content"] for row in rows], [original, ""])
-        self.assertTrue(all(row["draft_id"] == draft.id for row in rows))
-        self.assertTrue(all(isinstance(row["created_at"], str) for row in rows))
+        self.assertEqual(store.list_revisions(draft.id), [])
         store.close()
         reopened = self.open_store()
         self.assertEqual(reopened.get_draft(draft.id), cleared)
-        self.assertEqual(reopened.list_revisions(draft.id), rows)
+        self.assertEqual(reopened.list_revisions(draft.id), [])
 
     def test_transcript_appends_to_latest_origin_without_changing_raw_segment(self):
         store = self.open_store()
@@ -87,8 +123,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(segments[0]["text"], raw)
         self.assertTrue(segments[0]["created_at"])
         self.assertEqual(store.list_segments(other.id), [])
-        self.assertEqual([row["content"] for row in store.list_revisions(origin.id)],
-                         [latest, result.content])
+        self.assertEqual(store.list_revisions(origin.id), [])
         store.close()
         reopened = self.open_store()
         self.assertEqual(reopened.get_draft(origin.id), result)
@@ -101,7 +136,6 @@ class StoreTests(unittest.TestCase):
         store.append_transcript(origin.id, "same-job", "first.wav", "first text")
         newer = store.save_draft(origin.id, "User revised the appended text.")
         segments = store.list_segments(origin.id)
-        revisions = store.list_revisions(origin.id)
         store.close()
         reopened = self.open_store()
         self.assertEqual(reopened.append_transcript(
@@ -109,7 +143,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reopened.append_transcript(
             other.id, "same-job", "different.wav", "duplicate"), other)
         self.assertEqual(reopened.list_segments(origin.id), segments)
-        self.assertEqual(reopened.list_revisions(origin.id), revisions)
+        self.assertEqual(reopened.list_revisions(origin.id), [])
         self.assertEqual(reopened.list_segments(other.id), [])
         self.assertEqual(reopened.list_revisions(other.id), [])
 
@@ -119,14 +153,13 @@ class StoreTests(unittest.TestCase):
             with self.subTest(content=content):
                 draft = store.create_draft()
                 draft = store.save_draft(draft.id, content)
-                revisions = store.list_revisions(draft.id)
                 for index, raw in enumerate(("", " \n\t ")):
                     result = store.append_transcript(
                         draft.id, draft.id + str(index), "silent.wav", raw)
                     self.assertEqual(result, draft)
                 self.assertEqual([row["text"] for row in store.list_segments(draft.id)],
                                  ["", " \n\t "])
-                self.assertEqual(store.list_revisions(draft.id), revisions)
+                self.assertEqual(store.list_revisions(draft.id), [])
 
     def test_settings_round_trip_values_and_defaults(self):
         store = self.open_store()
@@ -167,12 +200,6 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(sqlite3.IntegrityError):
             with store._connection:
                 store._connection.execute(
-                    "INSERT INTO revisions (draft_id, content, created_at) VALUES (?, ?, ?)",
-                    ("missing", "orphan", "now"),
-                )
-        with self.assertRaises(sqlite3.IntegrityError):
-            with store._connection:
-                store._connection.execute(
                     "INSERT INTO segments (draft_id, request_id, audio_path, text, created_at) "
                     "VALUES (?, ?, ?, ?, ?)",
                     ("missing", "orphan-job", "audio.wav", "orphan", "now"),
@@ -209,31 +236,55 @@ class StoreTests(unittest.TestCase):
         result = store.append_transcript(draft.id, "retryable-job", "audio.wav", "text")
         self.assertEqual(result.content, "text")
 
-    def test_failed_revision_rolls_back_draft_and_segment_and_allows_retry(self):
+    def test_failed_segment_rolls_back_draft_and_allows_retry(self):
         store = self.open_store()
         draft = store.create_draft()
         draft = store.save_draft(draft.id, "Original user edits")
-        revisions = store.list_revisions(draft.id)
         with store._connection:
             store._connection.execute("""
-                CREATE TRIGGER fail_revision BEFORE INSERT ON revisions
+                CREATE TRIGGER fail_segment BEFORE INSERT ON segments
                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END
             """)
-        for operation in (
-            lambda: store.save_draft(draft.id, "Must not partially save", title="Changed"),
-            lambda: store.append_transcript(draft.id, "retry-job", "audio.wav", "append"),
-        ):
-            with self.assertRaisesRegex(sqlite3.IntegrityError, "injected write failure"):
-                operation()
-            self.assertEqual(store.get_draft(draft.id), draft)
-            self.assertEqual(store.list_segments(draft.id), [])
-            self.assertEqual(store.list_revisions(draft.id), revisions)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "injected write failure"):
+            store.append_transcript(draft.id, "retry-job", "audio.wav", "append")
+        self.assertEqual(store.get_draft(draft.id), draft)
+        self.assertEqual(store.list_segments(draft.id), [])
         with store._connection:
-            store._connection.execute("DROP TRIGGER fail_revision")
+            store._connection.execute("DROP TRIGGER fail_segment")
         result = store.append_transcript(draft.id, "retry-job", "audio.wav", "append")
         self.assertEqual(result.content, draft.content + "\n\nappend")
         self.assertEqual(len(store.list_segments(draft.id)), 1)
-        self.assertEqual(len(store.list_revisions(draft.id)), 2)
+        self.assertEqual(store.list_revisions(draft.id), [])
+
+    def test_forget_audio_clears_path_without_changing_text(self):
+        store = self.open_store()
+        draft = store.create_draft()
+        audio = Path(self.temp.name) / "keep-me.wav"
+        audio.write_bytes(b"wav")
+        saved = store.append_transcript(draft.id, "job-audio", audio, "Spoken text")
+        self.assertEqual(store.forget_audio("job-audio"), str(audio))
+        self.assertIsNone(store.forget_audio("job-audio"))
+        self.assertEqual(store.get_draft(draft.id), saved)
+        self.assertEqual(store.list_segments(draft.id)[0]["text"], "Spoken text")
+        self.assertEqual(store.list_segments(draft.id)[0]["audio_path"], "")
+
+    def test_existing_database_with_revisions_is_migrated(self):
+        store = self.open_store()
+        draft = store.append_transcript(store.create_draft().id, "old-job", "old.wav", "old")
+        with store._connection:
+            store._connection.execute("""
+                CREATE TABLE revisions (id INTEGER PRIMARY KEY,
+                    draft_id TEXT NOT NULL REFERENCES drafts(id),
+                    content TEXT NOT NULL, created_at TEXT NOT NULL)""")
+            store._connection.execute(
+                "INSERT INTO revisions (draft_id, content, created_at) VALUES (?, ?, ?)",
+                (draft.id, "old snapshot", "then"))
+        store.close()
+        reopened = self.open_store()
+        self.assertIsNone(reopened._connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'revisions'").fetchone())
+        self.assertEqual(reopened.get_draft(draft.id), draft)
+        self.assertEqual(reopened.forget_audio("old-job"), "old.wav")
 
 
 if __name__ == "__main__":
