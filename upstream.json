@@ -1,0 +1,77 @@
+{
+  "model": {
+    "repo": "ConwayResearch/Underdog-Bark-3.0-Clean",
+    "revision": "6d34ed8639b2b9a33e764acf06748519bbb950cf"
+  },
+  "processor": {
+    "repo": "nvidia/parakeet-tdt-0.6b-v3",
+    "revision": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
+  },
+  "files": {
+    "models/model.bark": {
+      "bytes": 179458613,
+      "sha256": "b67ca90d94b79a36af4616f1cb3f241884925de7aa9f3e673a8d5c6c4cfd3436",
+      "url": "https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean/resolve/6d34ed8639b2b9a33e764acf06748519bbb950cf/model.bark"
+    },
+    "vendor/bark_loader.py": {
+      "bytes": 5819,
+      "sha256": "97ee639ccfc9359a2ea8d9e9d253a630149932e9da629ce0d1363b9b44ec21ba",
+      "url": "https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean/resolve/6d34ed8639b2b9a33e764acf06748519bbb950cf/bark_loader.py"
+    },
+    "vendor/NOTICE": {
+      "bytes": 615,
+      "sha256": "4e627d41fa10efedd84a7dbb915711b0b73c904af1fee8bacdd4a2387bcc5a10",
+      "url": "https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean/resolve/6d34ed8639b2b9a33e764acf06748519bbb950cf/NOTICE"
+    },
+    "vendor/UPSTREAM_README.md": {
+      "bytes": 8455,
+      "sha256": "2c25fdc16066d69aa3b4d9224b2355d5f458938fba600db820f615327a387243",
+      "url": "https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean/resolve/6d34ed8639b2b9a33e764acf06748519bbb950cf/README.md"
+    },
+    "models/processor/config.json": {
+      "bytes": 1153,
+      "sha256": "e747b85e1bdfd300c8b8ac63bac8dd5221f8fe9bc275b48d06c735fcd6971b6e",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/config.json"
+    },
+    "models/processor/generation_config.json": {
+      "bytes": 289,
+      "sha256": "b141de6ec6d7f982ece13f98f604e3fe1807ea9c0e839185d0ab7064604209d0",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/generation_config.json"
+    },
+    "models/processor/processor_config.json": {
+      "bytes": 392,
+      "sha256": "8346a93a3b987fa1dec57a78f045cd0817d21786589a5a096b41a57a446fd1d7",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/processor_config.json"
+    },
+    "models/processor/tokenizer.json": {
+      "bytes": 1159960,
+      "sha256": "bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/tokenizer.json"
+    },
+    "models/processor/tokenizer_config.json": {
+      "bytes": 290,
+      "sha256": "0b2fe0037599ee335f0b972fa682bf0ece74e4ccfec755cb7daa3405d3d3e874",
+      "url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b/tokenizer_config.json"
+    },
+    "samples/jfk.flac": {
+      "bytes": 1152693,
+      "sha256": "63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715",
+      "url": "https://raw.githubusercontent.com/openai/whisper/86098128c0b4f24f0e2aa2994de830614b474227/tests/jfk.flac"
+    },
+    "samples/1272-128104-0000.flac": {
+      "bytes": 120041,
+      "sha256": "4e25e22555cd16e90edb0a3b49fdcf1fe652b2a1250ab643634db33895c75b41",
+      "url": "HF dataset cached audio; see fixtures.json for stable dataset/sample identity"
+    },
+    "samples/1272-128104-0001.flac": {
+      "bytes": 101672,
+      "sha256": "46a9d58622b4675b29564da2d9ba73e702241c5fa969f12c387cad4aa984276a",
+      "url": "HF dataset cached audio; see fixtures.json for stable dataset/sample identity"
+    },
+    "samples/1272-128104-0002.flac": {
+      "bytes": 255853,
+      "sha256": "59bf7bb1129c11734a8dd362ad52b4e10ae31c03f0879fc92f7107ecd513513f",
+      "url": "HF dataset cached audio; see fixtures.json for stable dataset/sample identity"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "jfk": {
+    "path": "samples/jfk.flac",
+    "source": "https://github.com/openai/whisper/blob/86098128c0b4f24f0e2aa2994de830614b474227/tests/jfk.flac",
+    "reference": "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country.",
+    "reference_note": "Manual reference for this public-domain speech excerpt; punctuation/case not scored."
+  },
+  "librispeech": [
+    {
+      "path": "samples/1272-128104-0000.flac",
+      "id": "1272-128104-0000",
+      "reference": "MISTER QUILTER IS THE APOSTLE OF THE MIDDLE CLASSES AND WE ARE GLAD TO WELCOME HIS GOSPEL",
+      "source": "hf-internal-testing/librispeech_asr_dummy",
+      "revision": "5be91486e11a2d616f4ec5db8d3fd248585ac07a",
+      "split": "validation",
+      "row_idx": 0
+    },
+    {
+      "path": "samples/1272-128104-0001.flac",
+      "id": "1272-128104-0001",
+      "reference": "NOR IS MISTER QUILTER'S MANNER LESS INTERESTING THAN HIS MATTER",
+      "source": "hf-internal-testing/librispeech_asr_dummy",
+      "revision": "5be91486e11a2d616f4ec5db8d3fd248585ac07a",
+      "split": "validation",
+      "row_idx": 1
+    },
+    {
+      "path": "samples/1272-128104-0002.flac",
+      "id": "1272-128104-0002",
+      "reference": "HE TELLS US THAT AT THIS FESTIVE SEASON OF THE YEAR WITH CHRISTMAS AND ROAST BEEF LOOMING BEFORE US SIMILES DRAWN FROM EATING AND ITS RESULTS OCCUR MOST READILY TO THE MIND",
+      "source": "hf-internal-testing/librispeech_asr_dummy",
+      "revision": "5be91486e11a2d616f4ec5db8d3fd248585ac07a",
+      "split": "validation",
+      "row_idx": 2
+    }
+  ]
+}

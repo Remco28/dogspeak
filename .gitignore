@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+models/
+samples/
+recordings/
+results/
+.env
+.env.*
+!.env.example
+vendor/.cache/

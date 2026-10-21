@@ -1,0 +1,50 @@
+{
+  "strategy": "no_init_weights + load_state_dict(assign=True); same FP32 evaluated weights",
+  "model_load_seconds": 23.870872288011014,
+  "rss_after_load_mib": 3101.70703125,
+  "runs": [
+    {
+      "file": "samples/1272-128104-0000.flac",
+      "repeat": 0,
+      "seconds": 1.0083666400169022,
+      "text": "Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "rss_mib": 3130.62109375
+    },
+    {
+      "file": "samples/1272-128104-0000.flac",
+      "repeat": 1,
+      "seconds": 1.0694603570154868,
+      "text": "Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "rss_mib": 3124.49609375
+    },
+    {
+      "file": "samples/jfk.flac",
+      "repeat": 0,
+      "seconds": 1.6691789550241083,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 3142.75
+    },
+    {
+      "file": "samples/jfk.flac",
+      "repeat": 1,
+      "seconds": 1.2052875200170092,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 3142.75
+    },
+    {
+      "file": "samples/jfk-repeated-33s.wav",
+      "repeat": 0,
+      "seconds": 4.403720278001856,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 3146.359375
+    },
+    {
+      "file": "samples/jfk-repeated-33s.wav",
+      "repeat": 1,
+      "seconds": 4.988657662004698,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 3146.37109375
+    }
+  ],
+  "peak_rss_mib": 3374.49609375
+}

@@ -1,0 +1,190 @@
+{
+  "model_load_seconds": 32.549100568983704,
+  "unpack_seconds": 23.278410631988663,
+  "startup_seconds": 37.44406160101062,
+  "runtime_internet_connections_blocked": true,
+  "torch": "2.14.1+cpu",
+  "peak_rss_mib": 5522.32421875,
+  "runs": [
+    {
+      "file": "samples/1272-128104-0000.flac",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 5.855,
+      "seconds": 1.2206983669893816,
+      "text": "Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "rss_mib": 5518.578125
+    },
+    {
+      "file": "samples/1272-128104-0000.flac",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 5.855,
+      "seconds": 1.1810985049814917,
+      "text": "Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.",
+      "rss_mib": 5518.62890625
+    },
+    {
+      "file": "samples/1272-128104-0001.flac",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 4.815,
+      "seconds": 1.0370215779985301,
+      "text": "Nor is Mister Quilter's manner less interesting than his matter.",
+      "rss_mib": 5519.12890625
+    },
+    {
+      "file": "samples/1272-128104-0001.flac",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 4.815,
+      "seconds": 0.8952994350111112,
+      "text": "Nor is Mister Quilter's manner less interesting than his matter.",
+      "rss_mib": 5519.12890625
+    },
+    {
+      "file": "samples/1272-128104-0002.flac",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 12.485,
+      "seconds": 1.9792379390564747,
+      "text": "He tells us that at this festive season of the year, with Christmas and roast beef looming before us, similes drawn from eating and its results occur most readily to the mind.",
+      "rss_mib": 5520.19921875
+    },
+    {
+      "file": "samples/1272-128104-0002.flac",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 12.485,
+      "seconds": 1.9823537099873647,
+      "text": "He tells us that at this festive season of the year, with Christmas and roast beef looming before us, similes drawn from eating and its results occur most readily to the mind.",
+      "rss_mib": 5519.05859375
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 11.0,
+      "seconds": 2.2057311729877256,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5519.21484375
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 11.0,
+      "seconds": 1.5214058759738691,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5519.21484375
+    },
+    {
+      "file": "silence-5s",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 5.0,
+      "seconds": 0.8999060390051454,
+      "text": "",
+      "rss_mib": 5519.35546875
+    },
+    {
+      "file": "silence-5s",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 5.0,
+      "seconds": 1.2402232969761826,
+      "text": "",
+      "rss_mib": 5519.35546875
+    },
+    {
+      "file": "noise-5s",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 5.0,
+      "seconds": 0.8944928770069964,
+      "text": "",
+      "rss_mib": 5519.35546875
+    },
+    {
+      "file": "noise-5s",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 5.0,
+      "seconds": 0.9382094650063664,
+      "text": "",
+      "rss_mib": 5519.35546875
+    },
+    {
+      "file": "jfk-repeated-33s",
+      "threads": 4,
+      "repeat": 0,
+      "audio_seconds": 33.0,
+      "seconds": 4.6282550700125284,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5522.0546875
+    },
+    {
+      "file": "jfk-repeated-33s",
+      "threads": 4,
+      "repeat": 1,
+      "audio_seconds": 33.0,
+      "seconds": 4.027552880987059,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country. And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5522.0546875
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 1,
+      "repeat": 0,
+      "audio_seconds": 11,
+      "seconds": 3.0533013740205206,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5522.53125
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 1,
+      "repeat": 1,
+      "audio_seconds": 11,
+      "seconds": 3.0379478320246562,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5522.53125
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 1,
+      "repeat": 2,
+      "audio_seconds": 11,
+      "seconds": 2.8421938869869336,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5522.53125
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 2,
+      "repeat": 0,
+      "audio_seconds": 11,
+      "seconds": 1.7073869800078683,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5523.1015625
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 2,
+      "repeat": 1,
+      "audio_seconds": 11,
+      "seconds": 1.8014753790339455,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5523.1015625
+    },
+    {
+      "file": "samples/jfk.flac",
+      "threads": 2,
+      "repeat": 2,
+      "audio_seconds": 11,
+      "seconds": 1.7315380559884943,
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+      "rss_mib": 5523.1015625
+    }
+  ]
+}
