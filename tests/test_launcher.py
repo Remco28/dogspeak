@@ -66,6 +66,29 @@ class DesktopTests(unittest.TestCase):
                 self.assertTrue(str(icon).startswith(str(Path(tmp) / 'icons/hicolor')))
                 self.assertEqual(icon.read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
 
+    def test_icon_install_refreshes_an_existing_icon_cache_only(self):
+        import desktop_install
+        import tempfile
+        calls = []
+
+        class Done:
+            returncode, stderr = 0, ''
+        run = lambda command, **_: calls.append(command) or Done()
+        with tempfile.TemporaryDirectory() as tmp:
+            desktop_install.install_icons(ROOT, tmp, run=run)
+            self.assertEqual(calls, [], 'no cache: leave the folder without one')
+            theme = Path(tmp) / 'icons/hicolor'
+            (theme / 'icon-theme.cache').write_bytes(b'stale')
+            desktop_install.install_icons(ROOT, tmp, run=run)
+            self.assertEqual(calls[-1][0], 'gtk-update-icon-cache')
+            self.assertEqual(calls[-1][-1], str(theme))
+        with tempfile.TemporaryDirectory() as tmp:
+            theme = Path(tmp) / 'icons/hicolor'
+            theme.mkdir(parents=True)
+            (theme / 'icon-theme.cache').write_bytes(b'stale')
+            desktop_install.install_icons(ROOT, tmp)
+            self.assertGreater((theme / 'icon-theme.cache').stat().st_size, 5, 'real cache rebuilt')
+
     def test_overlay_install_is_user_scoped_and_replaces_old_copies(self):
         import tempfile
         import desktop_install

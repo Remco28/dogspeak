@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import subprocess
 import sys
 
 APP_ID = "io.github.Remco28.Dogspeak"
@@ -41,8 +42,12 @@ def install_entry(root=ROOT, data_home=None):
     return target
 
 
-def install_icons(root=ROOT, data_home=None):
-    """Copy the app icon at every size into the user's hicolor theme."""
+def install_icons(root=ROOT, data_home=None, run=subprocess.run):
+    """Copy the app icon at every size into the user's hicolor theme.
+
+    If that folder already has an icon-theme.cache (another app made one), GTK
+    and GNOME Shell trust it and ignore icons it doesn't list, so rebuild it.
+    """
     source = Path(root).resolve() / "data" / "icons" / "hicolor"
     data_home = Path(data_home or os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
     installed = []
@@ -53,6 +58,15 @@ def install_icons(root=ROOT, data_home=None):
         installed.append(target)
     if not installed:
         raise ValueError(f"Missing app icons under {source}")
+    theme = data_home / "icons" / "hicolor"
+    if (theme / "icon-theme.cache").exists():
+        try:
+            result = run(["gtk-update-icon-cache", "--force", "--ignore-theme-index", "--quiet", str(theme)],
+                         capture_output=True, text=True)
+        except OSError as error:
+            raise RuntimeError(f"Could not refresh the icon cache in {theme}: {error}") from error
+        if result.returncode != 0:
+            raise RuntimeError(f"Could not refresh the icon cache in {theme}: {result.stderr.strip()}")
     return installed
 
 
