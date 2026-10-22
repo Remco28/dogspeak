@@ -137,7 +137,7 @@ class DesktopTests(unittest.TestCase):
             def get_string(self, key): return self.values.get(key, '')
             def set_string(self, key, value): self.values[key] = value; return True
         settings = Settings(**{'custom-keybindings': ['/existing/']})
-        bindings = {'/existing/': Settings(name='Spokenly', binding='<Control>space', command='spokenly')}
+        bindings = {'/existing/': Settings(name='Other dictation app', binding='<Control>space', command='other-app')}
         def binding_factory(path): return bindings.setdefault(path, Settings())
         for _ in range(2):
             desktop_install.configure_shortcut(ROOT, settings, binding_factory)

@@ -111,7 +111,7 @@ def _accelerator_key(binding):
 
 
 def configure_shortcut(root, settings, binding_factory, binding="<Super>r"):
-    """Preserve other custom bindings; never replace Spokenly's shortcut."""
+    """Preserve other custom bindings; never replace another app's shortcut."""
     paths = settings.get_strv("custom-keybindings")
     for path in paths:
         existing = binding_factory(path)

@@ -2,114 +2,141 @@
 
 # Dogspeak
 
-An **editor-first local dictation scratchpad and prompt design lab**. Dictate freely, let **Clean up** turn the ramble into a clear prompt, edit it, and copy it to a coding agent. The desktop app uses GTK4/libadwaita, local Bark Clean speech recognition, and SQLite autosave. Dictation never leaves the computer; only the optional Clean up button sends the draft to a language-model provider you configure.
+**Talk freely, get a clear prompt.** Dogspeak is a dictation scratchpad for Linux (GNOME). Speak the way you think, rambling, repeating yourself, changing your mind, and Dogspeak turns it into text you can edit and paste into a coding agent, an email or anything else.
 
-## Open the scratchpad
+- **Local speech recognition.** Dictation runs on your own computer with the [Underdog Bark 3.0 Clean](https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean) model, which also drops "um"s and false starts. No audio leaves the machine.
+- **Record from anywhere.** Press **Super+R** in any app; a small pill at the bottom of the screen shows the recording, **Enter** stops it, **Esc** cancels. The text lands in your current draft and on the clipboard.
+- **Clean up (optional).** One button sends the draft to a language model you choose (Claude, OpenRouter, OpenAI, Gemini, a local Ollama model, …) and turns it into a coherent, well-structured prompt, with suggestions on what's still missing. Every clean-up can be undone.
+- **Drafts, not chats.** Several drafts, autosaved, with titles; nothing is sent or pasted anywhere unless you do it.
 
-On the original ThinkPad checkout, dependencies and model assets are already present:
+![Dogspeak after a clean-up: the structured prompt on the left, suggestions on the right](docs/cleanup.png)
 
-```sh
-cd ~/Dev/dogspeak
-./app.sh
-```
+## Requirements
 
-For a fresh clone, follow [SETUP.md](SETUP.md) first. The native frontend runs with distro `/usr/bin/python3` and PyGObject. A separate project-venv Python worker loads the model once per session; editing stays responsive during startup and transcription. Startup can take roughly half a minute and the resident model process uses about 3.1 GiB of RAM.
+- **Linux with GNOME.** Developed and tested on Ubuntu 26.04 (GNOME 50, Wayland); GNOME on X11 should work but hasn't been tested. On other desktops (KDE, Xfce, …) the editor, recording and Clean up work, but the Super+R shortcut, the on-screen pill and the top-bar menu do not, because those are built on GNOME Shell.
+- **About 4 GB of free RAM** while Dogspeak is open (the speech model stays loaded) and about 2 GB of disk.
+- A microphone, and PipeWire (the default on current Ubuntu, Fedora and Debian).
+- No GPU is needed; recognition runs on the CPU. A paragraph typically takes one to two seconds.
 
-### First-version workflow
+**Windows and macOS are not supported.** See [Porting](#porting-to-other-platforms) below for what it would take.
 
-- Edit the main draft and its title; changes save locally.
-- **Record / Stop** or **Super+R** toggles capture (Ctrl+Shift+R also works inside the window). The same shortcut can
-  be enabled globally; it records into the current draft without bringing the
-  editor to the front.
-- While recording, **Enter** stops and transcribes; **Escape** cancels and
-  deletes the partial audio. Escape during transcription drops that result.
-- A small status pill appears at the bottom of the screen, above whatever app
-  has focus (even fullscreen): *Recording 0:07* → *Transcribing…* → *Saved*.
-  While it shows Recording, Enter and Escape work from any app; they are
-  released as soon as the job ends. See [the screenshot](docs/overlay.png).
-- A recording started while another app has focus is added to the draft **and**
-  copied, so you can paste it with Ctrl+V where you are. Nothing is pasted for you.
-- If the global shortcut is pressed while the model is still loading, the pill
-  says so and tells you when Dogspeak is ready; it never starts recording late.
-- If the model worker crashes, press Record (or the shortcut) to restart it.
-- Select **System default** or a specific microphone.
-- After stopping, the transcript appends as a new paragraph. You can keep editing while it processes.
-- **Copy all** or **Ctrl+Shift+C** copies the draft; ordinary selection/copy also works.
-- **New draft / Ctrl+N** starts another draft without discarding the previous one; reopen saved drafts with **Ctrl+O**. The trash button on a draft in that list deletes it, with its saved transcripts, after you confirm.
-- While Dogspeak runs, a microphone icon in the top bar ([screenshot](docs/tray.png)) offers Show Dogspeak, Start/Stop recording, New draft, Copy all and Quit. It turns red while recording and amber while transcribing. Closing the window only hides it; use the icon to bring it back.
-- Import an existing WAV/FLAC to retry a recording. The original CLI is still available below.
+## Install
 
-Recording starts only on explicit action, never at app launch or as a deferred surprise after loading. Capture automatically stops at 115 seconds, below the engine's 120-second input limit. Closing the window hides the editor and keeps the model loaded; **Ctrl+Q** or Quit unloads the worker. There is no permanent background service or automatic login startup. No text is pasted or sent to another program automatically.
+1. Install the system packages (Ubuntu or Debian; other distributions have equivalents):
 
-User data is separate from the checkout, under `$XDG_DATA_HOME/dogspeak` (normally `~/.local/share/dogspeak`). This includes the local database and original ASR text. `DOGSPEAK_DATA_DIR` overrides this for isolated testing. Finished or cancelled recordings are deleted. No user data is uploaded or committed.
+   ```sh
+   sudo apt install git python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 pipewire-bin
+   ```
 
-### Application launcher and optional global shortcut
+2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), the Python package manager Dogspeak uses for its speech-recognition environment. It fetches the right Python version by itself.
 
-Install the launcher in your user account (no sudo):
+3. Clone and set up:
 
-```sh
-/usr/bin/python3 desktop_install.py
-```
+   ```sh
+   git clone https://github.com/Remco28/dogspeak.git
+   cd dogspeak
+   ./setup.sh
+   ```
 
-Dogspeak will appear in the desktop application launcher. To additionally opt in to a GNOME **Super+R** global record toggle:
+   `setup.sh` builds the speech-recognition environment and downloads the model (about 180 MB), checking every file against the checksums in `upstream.json`. It is safe to run again.
 
-```sh
-/usr/bin/python3 desktop_install.py --shortcut
-```
+4. Start it:
 
-This also installs the **Dogspeak Overlay** GNOME Shell extension (`gnome-extension/`) that draws the status pill and the top-bar icon. A GTK window cannot be kept above the focused app on Wayland, so the Shell has to draw it. GNOME only discovers a new extension at login: **log out and back in once** after installing. Until then (or if the extension is turned off) status falls back to a notification banner, and Enter/Escape only work inside the Dogspeak window. Re-run the command after pulling changes to the extension.
+   ```sh
+   ./app.sh
+   ```
 
-This preserves other custom shortcuts and refuses a conflicting custom binding. It does not take over Spokenly's shortcut. If Dogspeak is not running, the first invocation opens/loads it; recording is not queued while the model loads. The app must remain open (window may be hidden) for warm, ready-to-record use. You can also assign `~/Dev/dogspeak/app.sh --toggle-recording` in your desktop's shortcut settings.
+   The first start takes about half a minute while the model loads; you can type in the meantime.
 
-## Clean up (optional, uses a model provider you choose)
+5. **Recommended:** add Dogspeak to the app launcher and turn on Super+R, the on-screen pill and the top-bar menu:
 
-Dictate freely, then press **Clean up** (Ctrl+Shift+L). A language model rewrites the draft into coherent text: repeated points merged, corrections kept, grammar fixed, nothing invented, names and identifiers untouched.
+   ```sh
+   /usr/bin/python3 desktop_install.py --shortcut
+   ```
 
-- **Purpose** (optional): leave it blank for general clean-up, or say what the text is for. The menu has presets (*Prompt for an AI agent*, *Essay*, *Email*, *Notes*) plus your last five typed purposes. A prompt purpose gets instruction-like structure: goal, context, requirements, what counts as done.
-- The result **replaces** the draft. **Ctrl+Z** undoes it at once; **Revert** steps back through versions, and the version menu jumps to any of the last 20 kept per draft. Hand edits are saved as a version before you jump away, so nothing is lost.
-- **Suggestions** from the same request appear in the side panel (toggle in the header). They are read-only; dismiss each with ×.
-- While a clean-up runs the draft is locked and greyed; **Esc** cancels. A transcript that arrives meanwhile is kept after the cleaned text.
+   Then **log out and back in once**, so GNOME Shell loads the Dogspeak extension. Without `--shortcut`, only the launcher entry is added. The installer never replaces a shortcut another app already uses; it stops and tells you instead.
 
-**Setup:** ☰ menu → **Settings** (Ctrl+,). Pick a provider (OpenRouter is the default; **Claude (Anthropic)**, OpenAI, Google Gemini, Groq, DeepSeek, Ollama on this computer, or any OpenAI-compatible address), paste an API key and a model name, and press **Test**. Claude uses an API key from the Claude Console (platform.claude.com), runs through Anthropic's official Python SDK in the project venv, and starts with `claude-opus-5-5`; `claude-haiku-5-5` is far cheaper. The test only checks the key and the model, so it costs nothing. The key is stored in the GNOME keyring, not in Dogspeak's files.
+## Using Dogspeak
 
-Only the Clean up button sends text off this computer: the draft and the purpose, to the provider you configured. Dictation stays local. See [PRODUCT.md](PRODUCT.md) for the design decisions.
+### Dictation
 
-## Existing CLI and measurements
+- **Record** (or **Super+R**, from any app) starts recording; press it again, or **Enter**, to stop. **Esc** cancels and throws the audio away.
+- The transcript is added to the current draft as a new paragraph. You can keep typing while it's being transcribed.
+- A recording started while another app has focus is also put on the clipboard, so you can paste it straight away. Dogspeak never pastes for you.
+- Recordings stop automatically at 115 seconds. Audio files are deleted once transcribed.
+- Choose a microphone at the bottom right, or leave it on **System default**.
 
-```sh
-# Interactive terminal recording (Enter starts/stops; q quits)
-./run.sh listen
+### Drafts
 
-# Transcribe files; two ADDITIONAL repeats after the first inference
-./run.sh transcribe samples/jfk.flac --threads 4 --repeats 2 \
-  --json results/cli-benchmark.json
-```
+- **Ctrl+N** new draft, **Ctrl+O** open a draft (the trash button deletes one, after asking), **Ctrl+Shift+C** copy the whole draft. Everything autosaves.
+- Closing the window only hides it; the model stays loaded so the next recording is instant. Bring it back from the microphone icon in the top bar or the app launcher. **Ctrl+Q** (or *Quit* in either menu) exits and frees the memory.
 
-Multiple files share one loaded model. The CLI reports startup, first/repeat inference, audio duration, real-time factor, current RSS and lifetime peak RSS separately. It accepts nonempty finite audio up to 120 seconds, downmixes stereo and resamples to 16 kHz. For paths outside the checkout, pass absolute filenames. CLI recordings/results remain under the Git-ignored source directories; GUI data lives in the XDG data directory instead.
+### Clean up
 
-Public speech and the user's own speech have run on this ThinkPad. The user confirmed disfluency cleanup; this does not imply perfect names, technical vocabulary, or self-correction handling. [BENCHMARK.md](BENCHMARK.md) retains the initial CPU measurements and their limitations. Dictation and inference use local assets; model/processor downloads happen only during setup.
+Press **Clean up** (**Ctrl+Shift+L**) and the draft is rewritten: repeated points merged, corrections kept, grammar fixed, names and code left exactly as you said them, nothing invented.
 
-## Tests
+- **Purpose** (optional): leave it blank for a general tidy-up, or say what the text is for. The menu offers *Prompt for an AI agent*, *Essay*, *Email*, *Notes* and your last five custom purposes. A prompt comes back structured as goal, context, requirements and what counts as done.
+- The result replaces the draft. **Ctrl+Z** undoes it immediately; **Revert** and the version menu go back through the last 20 versions. Edits you made by hand are kept as a version too, so nothing is lost.
+- **Suggestions** about what's missing or ambiguous appear in the side panel. They're for you to read; dismiss each with ×.
+- While a clean-up runs the draft is locked; **Esc** cancels it.
+
+**Setting up a provider:** open ☰ → **Settings** (**Ctrl+,**), pick a provider, paste an API key and a model name, and press **Test**. The test only checks the key and model; it costs nothing.
+
+| Provider | Where to get a key | Model name examples |
+|---|---|---|
+| OpenRouter (default) | [openrouter.ai](https://openrouter.ai/keys), one key for many models | see [openrouter.ai/models](https://openrouter.ai/models) |
+| Claude (Anthropic) | [platform.claude.com](https://platform.claude.com) | `claude-opus-5-5`, or `claude-haiku-5-5` for much lower cost |
+| OpenAI, Google Gemini, Groq, DeepSeek | the provider's console | the provider's model list |
+| Ollama on this computer | no key needed | any model you've pulled |
+| Anything OpenAI-compatible | choose *Custom* and enter its address | |
+
+API keys are stored in GNOME's password keyring, never in Dogspeak's files. Only the Clean up button sends anything off your computer: the draft and its purpose, to the provider you chose.
+
+## Privacy
+
+- Speech recognition is entirely local. Audio is deleted after transcription or cancellation.
+- Drafts live in `~/.local/share/dogspeak` (a SQLite database readable only by you). Nothing is uploaded or synced.
+- The model is downloaded once during setup; after that recognition works offline.
+- Clean up is the only feature that uses the network, and only when you press it.
+
+## Troubleshooting
+
+- **No pill, no top-bar icon, Super+R does nothing:** run `desktop_install.py --shortcut` and log out and back in. Check that user extensions are switched on in GNOME's *Extensions* app. Until the extension loads, Dogspeak shows its status as notifications.
+- **"Dogspeak is loading…" when pressing Super+R:** the model is still starting; press again in a moment. Dogspeak never starts a recording late on its own.
+- **Super+R already used:** the installer refuses to take a shortcut another app owns. You can bind `/path/to/dogspeak/app.sh --toggle-recording` to any key in GNOME *Settings → Keyboard → Custom Shortcuts*.
+- **Generic icon in the launcher:** run the installer again; it refreshes GNOME's icon cache.
+- **Clean up fails:** the banner gives the reason (key rejected, out of credit, model not found, offline). **Test** in Settings checks the setup without spending anything.
+- **Logs:** the speech worker writes to `~/.local/state/dogspeak/worker.log`.
+
+## Porting to other platforms
+
+The editor, drafts, version history, Clean up and the speech-recognition worker are plain Python and would carry over. Four pieces are Linux/GNOME-specific and would need a replacement per platform:
+
+1. **Audio capture** uses PipeWire's `pw-record` (`dogspeak_app/audio.py`).
+2. **The pill, Enter/Esc while recording, the clipboard hand-off and the top-bar menu** are a GNOME Shell extension (`gnome-extension/`), because Wayland doesn't let an app window stay on top. On Windows and macOS an always-on-top window and a tray icon do the job.
+3. **The global shortcut** is a GNOME custom keybinding (`desktop_install.py`).
+4. **API keys** use the Secret Service keyring (`dogspeak_app/credentials.py`); Windows and macOS have their own credential stores.
+
+The window uses GTK 4 and libadwaita, which run on Windows and macOS but look out of place there; a serious port would probably switch toolkits. [ARCHITECTURE.md](ARCHITECTURE.md) describes the module boundaries.
+
+## Development
 
 ```sh
 ./test.sh
 ```
 
-This runs core/ASR tests in the inference venv, then native GTK tests under Xvfb using system Python. GUI bindings are intentionally not injected into the inference environment. Automated unit tests use isolated data and simulated hardware/model behavior where appropriate; real recognition and the PipeWire capture path are exercised separately with public speech. Never treat mocked output as proof of transcription quality.
+runs the core tests in the project environment and the GTK tests headless (needs `xvfb`: `sudo apt install xvfb`). Tests use temporary data and stand-ins for the microphone, the speech model and the language-model providers; they never record or spend credit.
 
-## Verification
+- [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together and why.
+- [PRODUCT.md](PRODUCT.md): what Dogspeak is meant to be, and the decisions behind it.
+- [SETUP.md](SETUP.md): what `setup.sh` does, step by step, and the pinned model versions.
+- [BENCHMARK.md](BENCHMARK.md): speed and memory measurements of the speech model on a laptop CPU.
+- [docs/SCRATCHPAD-VERIFICATION.md](docs/SCRATCHPAD-VERIFICATION.md): how the app was checked end to end, and what hasn't been.
 
-See [the verification report](docs/SCRATCHPAD-VERIFICATION.md) for real
-native-app/worker/capture/persistence checks, the overlay, tray and Clean up
-checks, and what has not been verified yet.
+A command-line tool is also included for testing the model directly: `./run.sh listen` records in the terminal and `./run.sh transcribe FILE…` transcribes audio files (`./run.sh --help` lists the options).
 
-## Files and attribution
+## License and credits
 
-- [SETUP.md](SETUP.md): prerequisites, pinned downloads, offline assets, privacy.
-- `upstream.json` / `fixtures.json`: source revisions, checksums, public fixture identities.
-- `vendor/`: unchanged upstream loader, model card and attribution notice.
-- `docs/`: public-sample benchmark evidence and app screenshots—no personal recordings/transcripts.
-- `gnome-extension/`: the Dogspeak Overlay GNOME Shell extension (status pill, Enter/Esc while recording, clipboard, top-bar menu).
-- `data/icons/`: the app icon at standard sizes (installed by `desktop_install.py`); `data/logo/`: the full-size original logo.
+Dogspeak's code is released under the [MIT License](LICENSE).
 
-Model derivatives are CC-BY-4.0; retain `vendor/NOTICE`. A license for new Dogspeak application code has not yet been selected. Model weights, `.venv`, credentials, recordings, raw private results and user databases are not published.
+The speech model is **Underdog Bark 3.0 Clean** by Conway Research, derived from NVIDIA's Parakeet TDT 0.6B v3 and Moondream's Parakeet Ultra, all under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/). The model is downloaded during setup and is not part of this repository; its loader and notices are in `vendor/`, unchanged. Keep `vendor/NOTICE` with any redistribution.

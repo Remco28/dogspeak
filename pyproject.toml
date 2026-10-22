@@ -1,7 +1,8 @@
 [project]
 name = "dogspeak"
 version = "0.2.0"
-description = "An editor-first local dictation scratchpad and prompt design lab"
+description = "Local dictation scratchpad for Linux/GNOME that turns rambling speech into clear prompts"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "torch>=2.8",

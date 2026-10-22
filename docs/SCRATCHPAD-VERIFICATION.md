@@ -1,6 +1,6 @@
 # First scratchpad verification
 
-The first native GTK4/libadwaita scratchpad was exercised on the ThinkPad with
+The first native GTK4/libadwaita scratchpad was exercised on the development laptop with
 its real model worker and a private, isolated database. This is not a browser
 mockup or a simulated ASR demonstration.
 
@@ -42,7 +42,7 @@ The recorded public sentence was:
 
 > Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.
 
-The app's recorder handles this machine's PipeWire behavior where deliberate
+The app's recorder handles a PipeWire behavior seen on the development machine, where deliberate
 SIGINT may return status 1: that status is accepted only after intentionally
 stopping a running process and validating a finalized, nonempty WAV. Early
 capture failures and truncated output remain errors. The old CLI has a
@@ -64,11 +64,10 @@ shortcut list was unchanged; Super+Shift+D (since changed to Super+R) registrati
 `desktop_install.py --shortcut`. App-local actions/shortcuts and remote command
 forwarding were tested; an actual GNOME global keypress was not claimed.
 
-The user previously confirmed their own speech and filler removal via the
-engine. Further daily use is still needed to judge vocabulary, corrections,
-UI ergonomics, and recording from their preferred physical microphone. No
-LLM prompt cleanup, cloud request, startup service or automatic text sending
-is included in this first scratchpad.
+Real dictation had already confirmed filler removal. Further daily use is
+still needed to judge vocabulary, corrections and UI ergonomics. This first
+scratchpad had no language-model clean-up, cloud request, startup service or
+automatic text sending; Clean up came later and is covered below.
 
 ## Later additions (2026-10-21)
 
@@ -97,4 +96,5 @@ temporary PipeWire loopback source.
 
 Not yet verified: output quality from a real language model (no API key was
 available during development), and the overlay/top-bar extension on the
-user's own session before the post-install logout and login.
+developer's own session before the post-install logout and login (since
+confirmed working).

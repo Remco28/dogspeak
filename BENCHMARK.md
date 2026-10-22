@@ -2,18 +2,17 @@
 
 ## Initial engine-test verdict: PARTIAL
 
-This report preserves the original engine experiment and its measurements.
-Subsequently, the user recorded two natural-speech samples, confirmed filler
-removal, and accepted the observed paragraph-at-a-time latency. A word
-substitution was also observed; personal recordings and transcripts remain
-private. The user approved an editor-first scratchpad and a future prompt
-workshop; see PRODUCT.md and ARCHITECTURE.md. Broad technical-vocabulary and
-self-correction accuracy still require ongoing use, not assumptions from two
-samples. The “What remains” list below records the original experiment's gate.
+This report preserves the original engine experiment that decided whether
+Bark Clean was fast and accurate enough on a laptop CPU to build Dogspeak on.
+Afterwards, real dictation confirmed filler removal and an acceptable
+paragraph-at-a-time latency (one word substitution was observed; personal
+recordings stay private), and the app was built; see PRODUCT.md and
+ARCHITECTURE.md. Broad technical-vocabulary and self-correction accuracy
+still need wider use to judge. The "What remained" list at the end records
+the experiment's original gate.
 
-Actual inference ran on the ThinkPad; there is no fabricated output in this
-report. At the time of the initial experiment, personal dictation quality and
-GUI integration were not yet tested.
+All inference below actually ran on the development laptop; nothing is
+fabricated.
 
 ## Environment
 
@@ -89,17 +88,17 @@ second run. These were sequential small samples, not a randomized tuning
 study. Four threads is a sensible initial default, not a proven universal
 optimum. The CLI exposes the thread count for further testing.
 
-## What remains
+## What remained (at the time of the experiment)
 
-1. Use `./run.sh listen` with the user's real working microphone. This command
-   is opt-in; no microphone was opened during the public-audio benchmarks.
+1. Use `./run.sh listen` with a real working microphone. This command is
+   opt-in; no microphone was opened during the public-audio benchmarks.
 2. Judge cleanup, technical names/paths and self-corrections. Suggested real
    speech: an ordinary short prompt, a rambling longer instruction, and a
-   correction/negation such as “change the parser, actually do not change the
-   parser; only update the test.” Do not feed synthetic TTS as proof of this.
-3. Compare the usefulness and waiting time with normal Spokenly use. No
-   apples-to-apples Spokenly active-inference benchmark has been performed.
-4. Build the editable scratchpad only if the user judges the result worthwhile.
+   correction/negation such as "change the parser, actually do not change the
+   parser; only update the test." Do not feed synthetic TTS as proof of this.
+3. Compare usefulness and waiting time with an existing dictation tool. No
+   apples-to-apples comparison has been performed.
+4. Build the editable scratchpad only if the result is worthwhile. (It was.)
 
 The one-time load argues for keeping the model resident, not reloading per
 utterance. Caching unpacked weights or a CPU-optimized model export could be

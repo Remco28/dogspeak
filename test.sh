@@ -9,3 +9,4 @@ export TRANSFORMERS_OFFLINE=1
 xvfb-run -a dbus-run-session -- /usr/bin/python3 -W ignore::DeprecationWarning:gi.events -W ignore::DeprecationWarning:gi.overrides -m unittest discover -s tests -p 'test_gui.py' -v
 sh -n app.sh
 sh -n run.sh
+sh -n setup.sh
