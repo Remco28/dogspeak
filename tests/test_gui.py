@@ -1,5 +1,6 @@
 """Run with: xvfb-run -a /usr/bin/python3 -m unittest discover -s tests -p test_gui.py -v."""
 import importlib
+import itertools
 import os
 
 # Xvfb must win over the developer's inherited WAYLAND_DISPLAY.
@@ -708,6 +709,7 @@ class GtkTests(unittest.TestCase):
         self.assertTrue(self.app.register(None))
         self.app.activate()
         self.window = self.app.window
+        self.window.typing_pause = 0
         self.addCleanup(self.window.destroy)
         self.pump()
 
@@ -749,6 +751,355 @@ class GtkTests(unittest.TestCase):
         buf.undo()
         self.assertEqual(self.text(), '')
         self.assertEqual(self.window.title_entry.get_text(), 'Title from GTK')
+
+    def start_dictation(self, focused=True):
+        c = self.controller
+        self.engine.emit('ready')
+        c.focused = lambda: focused
+        self.assertTrue(c.toggle_recording())
+        c.stop_recording()
+        return self.engine.jobs[-1][1]
+
+    def dictate(self, text, focused=True):
+        self.engine.emit('result', id=self.start_dictation(focused), text=text)
+
+    def set_text(self, text):
+        buf = self.window.buffer
+        buf.begin_user_action()
+        buf.insert_at_cursor(text)
+        buf.end_user_action()
+
+    def caret(self):
+        buf = self.window.buffer
+        return buf.get_iter_at_mark(buf.get_insert()).get_offset()
+
+    def test_dictation_lands_at_the_cursor_which_then_follows_it(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        self.dictate('End')
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nEnd')
+        self.assertEqual(self.caret(), len(self.text()))
+        buf.place_cursor(buf.get_iter_at_offset(5))
+        self.dictate('Middle')
+        self.assertEqual(self.text(), 'First\n\nMiddle\n\nSecond\n\nEnd')
+        self.assertEqual(self.caret(), len('First\n\nMiddle'))
+        self.assertEqual(self.store.get_draft(self.controller.draft.id).content, self.text())
+        buf.undo()
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nEnd')
+
+    def test_cursor_stays_on_the_spoken_words_not_after_their_separator(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        buf.place_cursor(buf.get_iter_at_offset(7))
+        self.dictate('New')
+        self.assertEqual(self.text(), 'First\n\nNew\n\nSecond')
+        self.assertEqual(self.caret(), len('First\n\nNew'))
+        self.dictate('Next')
+        self.assertEqual(self.text(), 'First\n\nNew\n\nNext\n\nSecond')
+        self.assertEqual(self.caret(), len('First\n\nNew\n\nNext'))
+
+    def test_inline_dictation_in_a_row_keeps_single_spaces(self):
+        buf = self.window.buffer
+        self.set_text('one two')
+        buf.place_cursor(buf.get_iter_at_offset(3))
+        self.dictate('new')
+        self.dictate('more')
+        self.assertEqual(self.text(), 'one new more two')
+
+    def test_view_follows_dictation_down_a_long_draft(self):
+        self.set_text('\n'.join(f'Line {i}' for i in range(200)))
+        scroller = self.window.editor.get_parent().get_vadjustment()
+        self.window.buffer.place_cursor(self.window.buffer.get_start_iter())
+        self.pump(lambda: scroller.get_upper() > scroller.get_page_size() > 0)
+        scroller.set_value(0)
+        self.window.buffer.place_cursor(self.window.buffer.get_end_iter())
+        self.dictate('Bottom')
+        self.pump(lambda: scroller.get_value() > 0)
+
+    def test_dictation_after_a_selection_keeps_the_selected_text(self):
+        buf = self.window.buffer
+        self.set_text('Keep this words')
+        buf.select_range(buf.get_iter_at_offset(0), buf.get_iter_at_offset(9))
+        self.dictate('spoken')
+        self.assertEqual(self.text(), 'Keep this spoken words')
+        self.assertFalse(buf.get_has_selection())
+
+    def test_dictation_goes_to_the_end_while_the_window_is_closed(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        buf.place_cursor(buf.get_iter_at_offset(5))
+        self.window.set_visible(False)
+        self.dictate('Away')
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nAway')
+        self.assertEqual(self.caret(), 5)
+
+    def test_dictation_during_clean_up_stays_behind_what_was_sent(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        buf.place_cursor(buf.get_iter_at_offset(5))
+        self.pump()
+        self.assertTrue(self.window.cleanup.start())
+        self.dictate('Late')
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nLate')
+        self.run_llm()
+        self.assertEqual(self.text(), 'Clean text.\n\nLate')
+
+    def test_dictation_started_from_another_app_goes_to_the_end(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        buf.place_cursor(buf.get_iter_at_offset(5))
+        self.dictate('Elsewhere', focused=False)
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nElsewhere')
+        self.assertEqual(self.caret(), 5)
+
+    def test_imported_audio_goes_to_the_end(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        buf.place_cursor(buf.get_iter_at_offset(5))
+        self.engine.emit('ready')
+        audio = self.root / 'input.wav'
+        audio.write_bytes(b'audio')
+        self.assertTrue(self.controller.import_audio(audio))
+        self.engine.emit('result', id=self.engine.jobs[-1][1], text='Imported')
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nImported')
+
+    def test_dictation_inside_a_word_goes_after_the_word(self):
+        buf = self.window.buffer
+        self.set_text('hello world')
+        buf.place_cursor(buf.get_iter_at_offset(2))
+        self.dictate('there')
+        self.assertEqual(self.text(), 'hello there world')
+        buf.place_cursor(buf.get_iter_at_offset(len('hello there ')))
+        self.dictate('big')
+        self.assertEqual(self.text(), 'hello there big world')
+
+    def test_transcript_waits_for_a_pause_in_typing(self):
+        self.window.typing_pause = 0.2
+        self.set_text('First line\n\nI am typ')
+        request_id = self.start_dictation()
+        self.engine.emit('result', id=request_id, text='Spoken words.')
+        self.assertEqual(self.text(), 'First line\n\nI am typ')
+        self.assertIn('pause', self.window.status_label.get_text())
+        self.assertFalse(self.window.record_button.get_sensitive())
+        self.set_text('ing a word')
+        self.pump(lambda: 'Spoken' in self.text())
+        self.assertEqual(self.text(), 'First line\n\nI am typing a word\n\nSpoken words.')
+        self.assertEqual(self.controller.pending, {})
+        self.assertEqual(self.controller.held, {})
+
+    def test_waiting_transcript_can_be_dropped_with_esc(self):
+        self.window.typing_pause = 0.05
+        self.set_text('words')
+        self.engine.emit('result', id=self.start_dictation(), text='Dropped')
+        self.assertTrue(self.controller.cancel_recording())
+        time.sleep(0.06)
+        self.pump()
+        self.assertEqual(self.text(), 'words')
+
+    def test_waiting_transcript_follows_its_draft_when_another_opens(self):
+        self.window.typing_pause = 0.05
+        origin = self.controller.draft.id
+        self.set_text('words')
+        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
+        self.controller.new_draft()
+        self.pump(lambda: not self.controller.pending)
+        self.assertEqual(self.text(), '')
+        self.assertEqual(self.store.get_draft(origin).content, 'words\n\nSpoken')
+
+    def test_quitting_keeps_a_waiting_transcript(self):
+        self.window.typing_pause = 60
+        origin = self.controller.draft.id
+        database = self.root / 'kept.txt'
+        self.set_text('words')
+        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
+        save = self.store.close
+        self.store.close = lambda: (database.write_text(self.store.get_draft(origin).content), save())
+        self.controller.close()
+        self.assertEqual(database.read_text(), 'words\n\nSpoken')
+
+    def test_waiting_transcript_that_will_not_save_becomes_an_edit_on_quit(self):
+        self.window.typing_pause = 60
+        origin = self.controller.draft.id
+        kept = self.root / 'kept.txt'
+        self.set_text('words')
+        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
+        def fail(*args):
+            raise OSError('disk full')
+        self.store.append_transcript = fail
+        save = self.store.close
+        self.store.close = lambda: (kept.write_text(self.store.get_draft(origin).content), save())
+        self.assertTrue(self.controller.close())
+        self.assertEqual(kept.read_text(), 'words\n\nSpoken')
+
+    def test_unsavable_waiting_transcript_stays_with_its_own_draft(self):
+        c = self.controller
+        self.window.typing_pause = 60
+        origin = c.draft.id
+        kept = self.root / 'kept.txt'
+        self.set_text('words')
+        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
+        c.dispatch = lambda fn, *args: None  # the timer has not fired
+        c.new_draft()
+        other = c.draft.id
+        def fail(*args):
+            raise OSError('disk full')
+        c.draft = self.store.get_draft(other)
+        self.store.append_transcript = fail
+        save = self.store.close
+        self.store.close = lambda: (kept.write_text(repr((
+            self.store.get_draft(origin).content, self.store.get_draft(other).content))), save())
+        self.assertTrue(c.close())
+        self.assertEqual(kept.read_text(), repr(('words\n\nSpoken', '')))
+
+    def test_waiting_transcript_survives_refused_quit_and_retry(self):
+        self.window.typing_pause = 60
+        origin = self.controller.draft.id
+        kept = self.root / 'kept.txt'
+        self.set_text('words')
+        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
+        def fail(*args):
+            raise OSError('disk full')
+        append, save_draft = self.store.append_transcript, self.store.save_draft
+        self.store.append_transcript = self.store.save_draft = fail
+        self.assertFalse(self.controller.close())
+        self.assertEqual(self.text(), 'words\n\nSpoken')  # Copy text includes it
+        self.store.append_transcript, self.store.save_draft = append, save_draft
+        save = self.store.close
+        self.store.close = lambda: (kept.write_text(self.store.get_draft(origin).content), save())
+        self.assertTrue(self.controller.close())
+        self.assertEqual(kept.read_text(), 'words\n\nSpoken')
+
+    def test_hidden_append_leaves_a_selection_alone(self):
+        buf = self.window.buffer
+        self.set_text('Whole draft')
+        buf.select_range(buf.get_start_iter(), buf.get_end_iter())
+        self.window.set_visible(False)
+        self.dictate('Away')
+        start, end = buf.get_selection_bounds()
+        self.assertEqual((start.get_offset(), end.get_offset()), (0, len('Whole draft')))
+
+    def test_returning_to_a_draft_puts_the_cursor_at_its_end(self):
+        buf = self.window.buffer
+        self.set_text('First\n\nSecond')
+        buf.place_cursor(buf.get_iter_at_offset(5))
+        origin = self.controller.draft.id
+        self.controller.new_draft()
+        self.controller.open_draft(origin)
+        self.assertEqual(self.caret(), len('First\n\nSecond'))
+        self.dictate('More')
+        self.assertEqual(self.text(), 'First\n\nSecond\n\nMore')
+
+    def test_opened_draft_starts_with_the_cursor_at_its_end(self):
+        c = self.controller
+        c.edit('Old', 'Some earlier text')
+        c.new_draft()
+        old = next(d.id for d in self.store.list_drafts() if d.title == 'Old')
+        c.open_draft(old)
+        self.assertEqual(self.text(), 'Some earlier text')
+        self.assertEqual(self.caret(), len('Some earlier text'))
+        self.dictate('More')
+        self.assertEqual(self.text(), 'Some earlier text\n\nMore')
+
+    def place(self, line, column=0):
+        buf = self.window.buffer
+        buf.place_cursor(buf.get_iter_at_line_offset(line, column)[1])
+
+    def test_lines_are_numbered_and_move_as_one_undoable_autosaved_step(self):
+        self.assertTrue(self.window.editor.get_show_line_numbers())
+        buf = self.window.buffer
+        self.set_text('one\ntwo\nthree')
+        self.place(1, 2)
+        self.app.activate_action('move-line-up', None)
+        self.assertEqual(self.text(), 'two\none\nthree')
+        self.assertEqual(self.caret(), 2)
+        self.pump(lambda: not self.controller.dirty)
+        self.assertEqual(self.store.get_draft(self.controller.draft.id).content, self.text())
+        buf.undo()
+        self.assertEqual(self.text(), 'one\ntwo\nthree')
+        self.place(0)
+        self.app.activate_action('move-line-down', None)
+        self.assertEqual(self.text(), 'two\none\nthree')
+        self.window.editor.set_editable(False)  # as during Clean up
+        self.app.activate_action('move-line-up', None)
+        self.assertEqual(self.text(), 'two\none\nthree')
+
+    def test_gtksource_key_binding_gets_our_move_too(self):
+        self.set_text('aaa\n\nbbb')
+        self.place(0)
+        self.window.editor.emit('move-lines', True)
+        self.assertEqual(self.text(), 'bbb\n\naaa')
+
+    def test_paragraphs_swap_and_blank_lines_stay_where_they_were(self):
+        self.set_text('aaa\n\nbbb\n\nccc')
+        self.place(0, 1)
+        self.window.move_line(True)
+        self.assertEqual(self.text(), 'bbb\n\naaa\n\nccc')
+        self.window.move_line(True)
+        self.assertEqual(self.text(), 'bbb\n\nccc\n\naaa')
+        self.assertEqual(self.window.buffer.get_iter_at_mark(
+            self.window.buffer.get_insert()).get_line(), 4)
+        self.window.move_line(True)  # already last
+        self.assertEqual(self.text(), 'bbb\n\nccc\n\naaa')
+        self.window.move_line(False)
+        self.window.move_line(False)
+        self.assertEqual(self.text(), 'aaa\n\nbbb\n\nccc')
+        self.window.buffer.undo()
+        self.assertEqual(self.text(), 'bbb\n\naaa\n\nccc')
+
+    def test_selected_lines_move_and_stay_selected(self):
+        buf = self.window.buffer
+        self.set_text('a\nb\nc\nd')
+        buf.select_range(buf.get_iter_at_line(0)[1], buf.get_iter_at_line(2)[1])
+        self.window.move_line(True)
+        self.assertEqual(self.text(), 'c\na\nb\nd')
+        start, end = buf.get_selection_bounds()
+        self.assertEqual(buf.get_text(start, end, True), 'a\nb\n')
+
+    def test_selection_moved_to_the_end_of_the_draft_moves_back(self):
+        buf = self.window.buffer
+        self.set_text('a\nb\n\nc')
+        buf.select_range(buf.get_iter_at_line(0)[1], buf.get_iter_at_line(2)[1])
+        self.window.move_line(True)
+        self.assertEqual(self.text(), 'c\n\na\nb')
+        start, end = buf.get_selection_bounds()
+        self.assertEqual(buf.get_text(start, end, True), 'a\nb')
+        self.window.move_line(False)
+        self.assertEqual(self.text(), 'a\nb\n\nc')
+
+    def test_moving_past_identical_lines_still_moves_the_cursor(self):
+        self.set_text('a\na\nb')
+        self.place(0)
+        self.window.move_line(True)
+        self.window.move_line(True)
+        self.assertEqual(self.text(), 'a\nb\na')
+
+    def test_moving_any_line_back_restores_the_text(self):
+        move = self.gui.move_lines
+        for size in range(1, 7):
+            for shape in itertools.product(('', 'x'), repeat=size):
+                lines = [f'{word}{i}' if word else '' for i, word in enumerate(shape)]
+                for line, word in enumerate(shape):
+                    moved = word and move(lines, line, line, True)
+                    if moved:
+                        new, _first, new_first = moved
+                        back = move(new, new_first, new_first, False)
+                        self.assertEqual(back and back[0], lines, (lines, line))
+
+    def test_move_lines_rules(self):
+        move = self.gui.move_lines
+        for lines, first, last, down, expected in (
+                (['a', 'b', '', 'c'], 1, 1, True, ['a', '', 'b', 'c']),
+                (['a', '', 'b', 'c'], 2, 2, False, ['a', 'b', '', 'c']),
+                (['a', '', 'b1', 'b2', '', 'c'], 0, 0, True, ['b1', 'b2', '', 'a', '', 'c']),
+                (['a', '', '', 'b'], 0, 0, True, ['b', '', '', 'a']),
+                (['a', '', 'b'], 0, 2, True, None),
+                (['', 'a', '', 'b'], 1, 1, False, None),
+                (['a', '', ''], 0, 0, True, None),
+                (['a', '', 'b'], 1, 1, True, None),
+                (['a1', 'a2', '', 'b', '', 'c'], 1, 3, True, ['c', '', 'a1', 'a2', '', 'b'])):
+            with self.subTest(lines=lines, first=first):
+                result = move(lines, first, last, down)
+                self.assertEqual(result and result[0], expected)
 
     def test_reopen_keeps_undo_history_after_background_origin_result(self):
         original = self.controller.draft.id

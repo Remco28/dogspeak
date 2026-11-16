@@ -1,4 +1,5 @@
 """Native, local Dogspeak scratchpad. Run with the system Python."""
+from dataclasses import replace
 from pathlib import Path
 import os
 import stat
@@ -12,7 +13,10 @@ import gi
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
+gi.require_version('GtkSource', '5')
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource  # noqa: E402
+
+from .storage import transcript_insertion  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = 'io.github.Remco28.Dogspeak'
@@ -25,6 +29,71 @@ def background(fn):
     thread = threading.Thread(target=fn, daemon=True)
     thread.start()
     return thread
+
+
+def move_lines(lines, first, last, down):
+    """Move lines[first..last] past their neighbour; (lines, first, new first) or None.
+
+    A whole paragraph swaps with the next one and every blank line stays put. A
+    line within a paragraph swaps with the next line, or at the paragraph's edge
+    joins the next paragraph. Moving back always undoes a move.
+    """
+    def blank(i):
+        return not lines[i].strip()
+
+    def block_start(i):
+        while i > 0 and not blank(i - 1):
+            i -= 1
+        return i
+
+    def block_end(i):
+        while i < len(lines) - 1 and not blank(i + 1):
+            i += 1
+        return i
+
+    if any(blank(i) for i in range(first, last + 1)):
+        while first <= last and blank(first):
+            first += 1
+        while last >= first and blank(last):
+            last -= 1
+        if first > last:
+            return None
+        first, last = block_start(first), block_end(last)
+    whole = block_start(first) == first and block_end(last) == last
+    unit = lines[first:last + 1]
+    if down:
+        after = last + 1
+        if after == len(lines):
+            return None
+        if not blank(after):
+            return lines[:first] + [lines[after]] + unit + lines[after + 1:], first, first + 1
+        start = after
+        while start < len(lines) and blank(start):
+            start += 1
+        if start == len(lines):
+            return None
+        gap = lines[after:start]
+        if not whole:
+            return lines[:first] + gap + unit + lines[start:], first, first + len(gap)
+        end = block_end(start)
+        other = lines[start:end + 1]
+        return (lines[:first] + other + gap + unit + lines[end + 1:], first,
+                first + len(other) + len(gap))
+    before = first - 1
+    if before < 0:
+        return None
+    if not blank(before):
+        return lines[:before] + unit + [lines[before]] + lines[last + 1:], first, before
+    end = before
+    while end >= 0 and blank(end):
+        end -= 1
+    if end < 0:
+        return None
+    gap = lines[end + 1:first]
+    if not whole:
+        return lines[:end + 1] + unit + gap + lines[last + 1:], first, end + 1
+    start = block_start(end)
+    return lines[:start] + unit + gap + lines[start:end + 1] + lines[last + 1:], first, start
 
 
 OVERLAY_BUS = 'io.github.Remco28.Dogspeak.Overlay'
@@ -144,10 +213,15 @@ class Controller:
         self.dirty = False
         # Last finished job: 'saved', 'empty' or 'cancelled'; cleared when a new one starts.
         self.outcome = None
-        self.on_draft = lambda draft, append=False: None
+        self.on_draft = lambda draft, append=False, at=None: None
         self.on_status = lambda: None
         # Whether the editor has focus; recordings started elsewhere are copied when done.
         self.focused = lambda: True
+        # Where a transcript for the shown draft goes; None means the end of the draft.
+        self.insertion_point = lambda: None
+        # True if a result must wait for the user to stop typing; it is delivered again later.
+        self.hold_result = lambda event: False
+        self.held = {}
         self.on_transcript = lambda text: None
         # Drafts another feature (Clean up) is still writing to.
         self.locked_drafts = lambda: set()
@@ -203,17 +277,27 @@ class Controller:
             job = self.pending.get(event.get('id'))
             if job is None:
                 return False
+            # Clean up keeps text that landed after what it sent, so stay at the end.
+            at = None
+            if (job.get('at_cursor') and job['draft_id'] == self.draft.id
+                    and job['draft_id'] not in self.locked_drafts()):
+                at = self.insertion_point()
+            if at is not None and self.hold_result(event):
+                self.held[event['id']] = event
+                self.status('transcribing', 'Waiting for you to pause typing…')
+                return False
+            self.held.pop(event['id'], None)
             try:
                 self.flush()
                 draft = self.store.append_transcript(
-                    job['draft_id'], event['id'], str(job['path']), event.get('text', ''))
+                    job['draft_id'], event['id'], str(job['path']), event.get('text', ''), at)
                 # Stored: the job is finished even if showing it fails below.
                 self.pending.pop(event['id'])
                 self._forget_audio(event['id'], job.get('path'))
                 if draft.id == self.draft.id:
                     self.draft = draft
                     self.title, self.content = draft.title, draft.content
-                    self.on_draft(draft, append=True)
+                    self.on_draft(draft, append=True, at=at)
                 text = event.get('text', '').strip()
                 self.outcome = 'saved' if text else 'empty'
                 if text and job.get('background'):
@@ -388,10 +472,11 @@ class Controller:
         try:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             self.recorder.start(path, target=self.source)
+            focused = self.focused()
             self.recording_job = {
                 'id': request_id, 'draft_id': self.draft.id, 'path': path,
                 'submitted': False, 'started_at': self.clock(),
-                'background': not self.focused()}
+                'at_cursor': focused, 'background': not focused}
             self.outcome = None
             self.status('recording', 'Recording')
             return True
@@ -522,6 +607,12 @@ class Controller:
             return True
         errors = []
         save_error = None
+        if not discard:  # a transcript waiting for a pause in typing must not be lost
+            self.hold_result = lambda event: False
+            for event in list(self.held.values()):
+                self._event(event)
+                if event['id'] in self.pending:
+                    self._keep_as_edit(event)
         if discard:
             self.dirty = False
         else:
@@ -566,6 +657,23 @@ class Controller:
             self._closed(errors)
         return self.closed
 
+    def _keep_as_edit(self, event):
+        """A transcript that wouldn't save becomes unsaved text, which close() protects."""
+        text = event.get('text', '').strip()
+        origin = self.pending[event['id']]['draft_id']
+        if text and origin != self.draft.id:
+            try:
+                content = self.store.get_draft(origin).content
+                self.store.save_draft(
+                    origin, content + transcript_insertion(content, len(content), text))
+                return
+            except Exception:
+                pass  # better in the wrong draft, in view, than gone
+        if text:
+            self.content += transcript_insertion(self.content, len(self.content), text)
+            self.dirty = True
+            self.on_draft(replace(self.draft, title=self.title, content=self.content), append=True)
+
     def _closed(self, errors):
         self._cleanup_done = True
         self.shutdown_error = '; '.join(errors)
@@ -583,6 +691,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
                          default_height=720)
         self.controller = controller
         self.rendering, self.save_source, self.closing = False, 0, False
+        self.last_edit, self.typing_pause = float('-inf'), 1.0
         self.drafts_dialog = self.save_error_dialog = self.settings_dialog = None
         if cleanup is None:
             from .cleanup import Cleanup
@@ -613,7 +722,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         record_box.append(self.record_icon)
         record_box.append(self.record_label)
         self.record_button.set_child(record_box)
+        line_menu = Gio.Menu()
+        line_menu.append('Move Line Up', 'app.move-line-up')
+        line_menu.append('Move Line Down', 'app.move-line-down')
         menu = Gio.Menu()
+        menu.append_section(None, line_menu)
         menu.append('Settings', 'app.settings')
         menu.append('Quit', 'app.quit')
         header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu,
@@ -625,14 +738,19 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         layout.add_top_bar(header)
         layout.add_top_bar(self.cleanup_view.bar)
         layout.add_top_bar(self.cleanup_view.banner)
-        self.buffer = Gtk.TextBuffer()
+        self.buffer = self._new_buffer()
         self.buffers = {}
-        self.buffer.set_enable_undo(True)
-        self.editor = Gtk.TextView(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR,
-                                   left_margin=40, right_margin=40, top_margin=28,
-                                   bottom_margin=28, pixels_above_lines=3,
-                                   pixels_below_lines=3, vexpand=True)
+        self.editor = GtkSource.View(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR,
+                                     left_margin=16, right_margin=40, top_margin=28,
+                                     bottom_margin=28, pixels_above_lines=3,
+                                     pixels_below_lines=3, vexpand=True,
+                                     show_line_numbers=True, highlight_current_line=True)
         self.editor.add_css_class('view')
+        self.editor.set_extra_menu(line_menu)
+        self.editor.connect('move-lines', self._move_lines)
+        Adw.StyleManager.get_default().connect('notify::dark', self._theme_changed)
+        # Scrolling does nothing until the view is laid out, so also do it when shown.
+        self.editor.connect('map', lambda *_: GLib.idle_add(self._show_cursor))
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         scroll.set_child(self.editor)
         content = Gtk.Box()
@@ -661,6 +779,8 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.title_entry.connect('changed', self._changed)
         self.controller.on_draft = self.render_draft
         self.controller.on_status = self.render_status
+        self.controller.insertion_point = self._insertion_point
+        self.controller.hold_result = self._hold_result
         self.set_hide_on_close(True)
         self.connect('close-request', self._close_requested)
         self._install_session_keys(self)
@@ -676,6 +796,87 @@ class ScratchpadWindow(Adw.ApplicationWindow):
                 sources = []
             GLib.idle_add(self._set_sources, sources)
         controller.spawn(discover)
+
+    def _scheme(self):
+        dark = Adw.StyleManager.get_default().get_dark()
+        return GtkSource.StyleSchemeManager.get_default().get_scheme(
+            'Adwaita-dark' if dark else 'Adwaita')
+
+    def _new_buffer(self):
+        buffer = GtkSource.Buffer(highlight_matching_brackets=False,
+                                  style_scheme=self._scheme())
+        buffer.set_enable_undo(True)
+        return buffer
+
+    def _theme_changed(self, *_):
+        for buffer in self.buffers.values():
+            buffer.set_style_scheme(self._scheme())
+
+    def _show_cursor(self):
+        self.editor.scroll_mark_onscreen(self.buffer.get_insert())
+        return False
+
+    def _insertion_point(self):
+        # With the window closed the cursor can't be seen, so it is no choice of the user's.
+        # Inside a word, the text goes after the word.
+        if not self.get_visible():
+            return None
+        _start, end = self.buffer.get_selection_bounds() or (None, None)
+        if end is None:
+            end = self.buffer.get_iter_at_mark(self.buffer.get_insert())
+        if end.inside_word() and not end.starts_word():
+            end.forward_word_end()
+        return end.get_offset()
+
+    def _hold_result(self, event):
+        wait = self.typing_pause - (self.controller.clock() - self.last_edit)
+        if wait <= 0:
+            return False
+        GLib.timeout_add(int(wait * 1000) + 1, self.controller._event, event)
+        return True
+
+    def move_line(self, down):
+        self.editor.emit('move-lines', down)
+
+    def _move_lines(self, editor, down):
+        # Replaces GtkSource's own move, which breaks up blank-line spacing.
+        editor.stop_emission_by_name('move-lines')
+        if not editor.get_editable():
+            return
+        buffer = self.buffer
+        cursor = buffer.get_iter_at_mark(buffer.get_insert())
+        bound = buffer.get_iter_at_mark(buffer.get_selection_bound())
+        start, end = sorted((cursor, bound), key=lambda i: i.get_offset())
+        last = end.get_line()
+        if end.starts_line() and last > start.get_line():
+            last -= 1  # a selection ending at a line's start doesn't include that line
+        lines = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True).split('\n')
+        moved = move_lines(lines, start.get_line(), last, down)
+        if moved is None:
+            return
+        new, first, new_first = moved
+        marks = [(mark.get_line() - first + new_first, mark.get_line_offset())
+                 for mark in (cursor, bound)]
+        if new != lines:  # identical neighbours: only the cursor moves
+            top = next(i for i, (a, b) in enumerate(zip(lines, new)) if a != b)
+            bottom = len(lines) - next(
+                i for i, (a, b) in enumerate(zip(reversed(lines), reversed(new))) if a != b)
+            buffer.begin_user_action()
+            begin = buffer.get_iter_at_line(top)[1]
+            stop = buffer.get_iter_at_line(bottom - 1)[1]
+            if not stop.ends_line():
+                stop.forward_to_line_end()
+            buffer.delete(begin, stop)
+            buffer.insert(buffer.get_iter_at_line(top)[1], '\n'.join(new[top:bottom]))
+            buffer.end_user_action()
+
+        def position(line, column):
+            if line >= len(new):  # a selection's end, on the line after the moved text
+                return buffer.get_end_iter()
+            line = max(0, line)
+            return buffer.get_iter_at_line_offset(line, min(column, len(new[line])))[1]
+        buffer.select_range(position(*marks[0]), position(*marks[1]))
+        self._show_cursor()
 
     def _set_sources(self, sources):
         if self.closing:
@@ -705,9 +906,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         except Exception as exc:
             self.controller.status('error', str(exc))
 
-    def _changed(self, *_):
+    def _changed(self, source=None):
         if self.rendering or self.closing:
             return
+        if source is not self.title_entry:
+            self.last_edit = self.controller.clock()
         self.controller.edit(self.title_entry.get_text(), self.buffer.get_text(
             self.buffer.get_start_iter(), self.buffer.get_end_iter(), True))
         if self.save_source:
@@ -720,7 +923,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.cleanup_view.refresh()  # the shown version follows undo and typing
         return False
 
-    def render_draft(self, draft, append=False):
+    def render_draft(self, draft, append=False, at=None):
         switching = self.displayed_draft != draft.id
         self.displayed_draft = draft.id
         self.rendering = True
@@ -731,25 +934,30 @@ class ScratchpadWindow(Adw.ApplicationWindow):
                 append = True
             else:
                 if self.buffers:
-                    self.buffer = Gtk.TextBuffer()
-                    self.buffer.set_enable_undo(True)
+                    self.buffer = self._new_buffer()
                     self.buffer.connect('changed', self._changed)
                     self.editor.set_buffer(self.buffer)
                 self.buffers[draft.id] = self.buffer
             if append:
                 old = self.buffer.get_text(self.buffer.get_start_iter(),
                                            self.buffer.get_end_iter(), True)
-                if not draft.content.startswith(old):
+                start = len(old) if at is None else at
+                added = draft.content[start:start + len(draft.content) - len(old)]
+                if draft.content != old[:start] + added + old[start:]:
                     raise RuntimeError('Draft changed outside the editor; reopen it to reconcile')
-                suffix = draft.content[len(old):]
-                if suffix:
+                if added:
                     cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert()).get_offset()
                     bound = self.buffer.get_iter_at_mark(self.buffer.get_selection_bound()).get_offset()
                     self.buffer.begin_user_action()
-                    self.buffer.insert(self.buffer.get_end_iter(), suffix)
+                    self.buffer.insert(self.buffer.get_iter_at_offset(start), added)
                     self.buffer.end_user_action()
-                    self.buffer.select_range(self.buffer.get_iter_at_offset(cursor),
-                                             self.buffer.get_iter_at_offset(bound))
+                    if at is not None:
+                        # After the words, not their separator: they must stay in view.
+                        self.buffer.place_cursor(
+                            self.buffer.get_iter_at_offset(start + len(added.rstrip())))
+                    elif cursor != bound:
+                        self.buffer.select_range(self.buffer.get_iter_at_offset(cursor),
+                                                 self.buffer.get_iter_at_offset(bound))
             else:
                 self.buffer.set_enable_undo(False)
                 self.buffer.set_text(draft.content)
@@ -757,6 +965,9 @@ class ScratchpadWindow(Adw.ApplicationWindow):
             self.title_entry.set_text(draft.title)
         finally:
             self.rendering = False
+        if switching:
+            self.buffer.place_cursor(self.buffer.get_end_iter())
+        self._show_cursor()
         if switching:
             self.editor.grab_focus()
             if getattr(self, 'cleanup_view', None) is not None:
@@ -1198,6 +1409,8 @@ class DogspeakApplication(Adw.Application):
             ('clean-up', None, lambda: self.window.cleanup.start()),
             ('settings', None, lambda: self.window.show_settings()),
             ('show-window', None, lambda: self.window.present()),
+            ('move-line-up', None, lambda: self.window.move_line(False)),
+            ('move-line-down', None, lambda: self.window.move_line(True)),
         ]:
             action = Gio.SimpleAction.new(name, parameter)
             action.connect('activate', lambda _a, _p, cb=callback: self._action(cb))
@@ -1210,7 +1423,8 @@ class DogspeakApplication(Adw.Application):
             'toggle-recording': ['<Super>r', '<Control><Shift>r'], 'new-draft': ['<Control>n'],
             'open-draft': ['<Control>o'], 'copy-all': ['<Control><Shift>c'],
             'quit': ['<Control>q'], 'clean-up': ['<Control><Shift>l'],
-            'settings': ['<Control>comma'],
+            'settings': ['<Control>comma'], 'move-line-up': ['<Alt>Up'],
+            'move-line-down': ['<Alt>Down'],
         }.items():
             self.set_accels_for_action('app.' + name, accelerators)
 

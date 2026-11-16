@@ -24,8 +24,12 @@ Personal recordings and transcripts are never part of the public repository.
 - Obvious Loading / Ready / Recording / Transcribing / Error state.
 - Microphone selection including system default; never record before an
   explicit user action or queue surprise capture during model loading.
-- Whole-recording transcription; append a new paragraph without destroying
-  edits made while inference runs or sending text into a different draft.
+- Whole-recording transcription, inserted at the cursor (which then follows it)
+  without destroying edits made while inference runs or sending text into a
+  different draft. It waits for a pause if the user is typing. A recording
+  started from another app, or with the window closed, goes at the end: the
+  cursor isn't in view. Showing a draft puts the cursor at the end.
+- Numbered lines; the current line or selection can be moved up and down.
 - Separate inference process, keeping the model resident while the app runs.
 - Copy all for transfer to a coding agent; nothing auto-pastes or auto-sends.
 - Import existing audio for retrying recordings and testing the complete app.

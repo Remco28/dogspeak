@@ -6,8 +6,8 @@ set -eu
 cd -- "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 missing=""
-/usr/bin/python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); gi.require_version('Secret', '1'); from gi.repository import Gtk, Adw, Secret" 2>/dev/null \
-  || missing="$missing python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1"
+/usr/bin/python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); gi.require_version('GtkSource', '5'); gi.require_version('Secret', '1'); from gi.repository import Gtk, Adw, GtkSource, Secret" 2>/dev/null \
+  || missing="$missing python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1"
 if ! command -v pw-record >/dev/null || ! command -v pw-dump >/dev/null; then
   missing="$missing pipewire-bin"
 fi

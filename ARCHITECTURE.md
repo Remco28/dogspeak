@@ -21,7 +21,7 @@ not HTTP. The UI never imports torch or runs inference in its event loop.
 
 Single editable draft, new/reopen drafts, title, autosave, record/stop,
 clear status/timer/error, copy all, native undo/redo, microphone selection.
-Transcriptions append a paragraph to the originating draft without replacing
+Transcriptions go to the cursor of the originating draft without replacing
 newer typing or leaking into a different selected draft. Keep ASR text; delete
 finished or cancelled audio. Model load once per application session. Closing
 the window hides it and keeps the worker; Quit stops the worker. No automatic
@@ -39,10 +39,12 @@ These small interfaces keep UI, persistence, capture and engine replaceable.
 - `Store(path)` SQLite connection, called on UI thread only.
 - create_draft(title='Untitled') -> Draft; list_drafts() -> list[Draft];
   get_draft(draft_id) -> Draft; save_draft(draft_id, content, title=None) -> Draft.
-- append_transcript(draft_id, request_id, audio_path, text) -> Draft atomically
-  stores untouched ASR segment and appends text once (request_id idempotent).
-  Preserve existing content exactly as prefix. Add blank-line separation;
-  empty transcript is stored but does not add blank paragraphs.
+- append_transcript(draft_id, request_id, audio_path, text, at=None) -> Draft
+  atomically stores untouched ASR segment and inserts text once at offset `at`,
+  or the end (request_id idempotent). Existing content is kept exactly around
+  it. transcript_insertion() picks the separators: spaces inside a line,
+  otherwise the gap the cursor sits in, a blank line by default; empty
+  transcript is stored but does not add blank paragraphs.
 - list_segments(draft_id) -> list[dict]; list_revisions(draft_id) -> [] (no
   content version history).
 - forget_audio(request_id) clears the stored path after a finished job.
@@ -74,8 +76,8 @@ These small interfaces keep UI, persistence, capture and engine replaceable.
   stop worker on GUI shutdown, close pipes and no orphan model process.
 
 ### gui.py
-Gio/Adw single-instance application id io.github.Remco28.Dogspeak. Gtk.TextView
-with undo, word wrap, generous margins, readable text; no webview. Toolbar
+Gio/Adw single-instance application id io.github.Remco28.Dogspeak. GtkSource.View
+(line numbers, move-lines; no highlighting language) with undo, word wrap, generous margins, readable text; no webview. Toolbar
 new/open/copy/record and title, subtle status bar/microphone selector.
 Keyboard Super+R (and Ctrl+Shift+R) toggles recording within app, Ctrl+N new draft,
 Ctrl+Shift+C copy all, Enter stops an active recording, Escape cancels
@@ -87,7 +89,15 @@ shortcut can record while another app is focused. Never defer an initial
 toggle until model ready (no surprise delayed capture). Parent owns optional
 shortcut integration. Backend events for pending requests map to origin draft
 IDs; persist latest edits before applying result. Render append as Gtk buffer
-insertion, not a full replacement that destroys editing/undo state. Keep
+insertion, not a full replacement that destroys editing/undo state. A result
+of a recording started with the window active goes to the shown draft's cursor
+(after any selection, which it does not replace; after the word, if inside one)
+and the cursor follows it. It waits, still pending, until edits have paused for
+a second; Controller.close delivers a waiting result, and if that save fails
+keeps its words as an unsaved edit. It goes to the end of the
+draft if the recording started elsewhere, it is an import, that draft isn't
+shown, the window is hidden, or Clean up is running on it. Showing a draft puts
+its cursor at the end. gui.move_lines replaces GtkSource's move-lines. Keep
 editing available while engine loads/transcribes; disable duplicate
 recording/jobs.
 
@@ -129,7 +139,7 @@ private bus (`dbus-run-session` in test.sh) so they never drive the real pill.
 - `cleanup.Cleanup(controller, credentials, client_factory)`: GTK-free. One
   request at a time; the provider call runs via `spawn`, returns via
   `dispatch`. Applies a result only if the origin draft still starts with what
-  was sent (a transcript appended meanwhile is kept after the result). Versions
+  was sent (a transcript landing meanwhile goes to the end and is kept after the result). Versions
   (SQLite `versions`, newest 20 per draft): "Original"/"Before clean up" before,
   "Clean up · <purpose>" with suggestions after, "Your edits" when jumping
   away from unsaved hand edits. Settings: `purpose`, `recent_purposes` (5,
@@ -145,4 +155,4 @@ private bus (`dbus-run-session` in test.sh) so they never drive the real pill.
 `app.sh` launches /usr/bin/python3 -m dogspeak_app.gui from project root,
 without modifying PYTHONPATH, system packages, or inference environment.
 Tests run system Python for UI/storage and venv Python for real ASR. System
-GTK4/libadwaita/PyGObject are runtime prerequisites. Preserve run.sh CLI.
+GTK4/libadwaita/GtkSourceView5/PyGObject are runtime prerequisites. Preserve run.sh CLI.

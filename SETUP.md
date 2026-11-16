@@ -7,19 +7,19 @@ can check it or do it by hand. For the short version, see the
 ## 1. System packages
 
 The window runs on your distribution's own Python with PyGObject; it never
-imports the speech-recognition packages. It needs GTK 4, libadwaita, the
-Secret Service bindings (for storing Clean up API keys) and the PipeWire tools
+imports the speech-recognition packages. It needs GTK 4, libadwaita, GtkSourceView 5 (the
+editor), the Secret Service bindings (for storing Clean up API keys) and the PipeWire tools
 `pw-record` and `pw-dump` (for recording and listing microphones). On Ubuntu or
 Debian:
 
 ```sh
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 pipewire-bin
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 pipewire-bin
 ```
 
 Check with:
 
 ```sh
-/usr/bin/python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); gi.require_version('Secret','1'); from gi.repository import Gtk, Adw, Secret; print('ok')"
+/usr/bin/python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); gi.require_version('GtkSource','5'); gi.require_version('Secret','1'); from gi.repository import Gtk, Adw, GtkSource, Secret; print('ok')"
 command -v pw-record pw-dump
 ```
 

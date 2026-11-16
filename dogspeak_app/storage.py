@@ -24,6 +24,18 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def transcript_insertion(content, at, text):
+    """What to insert at offset `at`: words inside a line, otherwise a paragraph
+    matching the gap the cursor sits in (one newline stays one; default a blank line)."""
+    left, right = content[:at], content[at:]
+    if left and right and not left.endswith("\n") and not right.startswith("\n"):
+        return ("" if left[-1].isspace() else " ") + text + ("" if right[0].isspace() else " ")
+    before = len(left) - len(left.rstrip("\n"))
+    after = len(right) - len(right.lstrip("\n"))
+    gap = min(before + after, 2) or 2
+    return ("\n" * (gap - before) if left else "") + text + ("\n" * (gap - after) if right else "")
+
+
 class Store:
     """Own a database file and connection, used only by its creating UI thread.
 
@@ -130,8 +142,9 @@ class Store:
         )
         return Draft(draft.id, title, content, updated_at)
 
-    def append_transcript(self, draft_id, request_id, audio_path, text):
-        """Append once per globally unique request ID; retries leave all drafts alone."""
+    def append_transcript(self, draft_id, request_id, audio_path, text, at=None):
+        """Add once per globally unique request ID, at offset `at` or else at the end;
+        retries leave all drafts alone."""
         with self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             draft = self.get_draft(draft_id)
@@ -146,7 +159,9 @@ class Store:
             )
             if not text.strip():
                 return draft
-            content = draft.content + ("\n\n" if draft.content else "") + text.strip()
+            at = len(draft.content) if at is None else min(at, len(draft.content))
+            content = (draft.content[:at] + transcript_insertion(draft.content, at, text.strip())
+                       + draft.content[at:])
             return self._save_draft(draft, content)
 
     def delete_draft(self, draft_id):

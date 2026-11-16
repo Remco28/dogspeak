@@ -1,3 +1,4 @@
+from uuid import uuid4
 """Storage contract tests; all databases live in disposable Hermes scratch dirs."""
 
 import dataclasses
@@ -146,6 +147,28 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reopened.list_revisions(origin.id), [])
         self.assertEqual(reopened.list_segments(other.id), [])
         self.assertEqual(reopened.list_revisions(other.id), [])
+
+    def test_transcript_goes_at_offset_and_respects_the_gap_it_lands_in(self):
+        store = self.open_store()
+        for content, at, expected in (
+                ("", None, "new"),
+                ("a", None, "a\n\nnew"),
+                ("a\n", None, "a\nnew"),           # the user's own line break is not doubled
+                ("a\n\n", None, "a\n\nnew"),
+                ("a\n\nb", 0, "new\n\na\n\nb"),
+                ("a\n\nb", 1, "a\n\nnew\n\nb"),   # end of a paragraph
+                ("a\n\nb", 2, "a\n\nnew\n\nb"),   # the blank line between two
+                ("a\n\nb", 3, "a\n\nnew\n\nb"),   # start of a paragraph
+                ("a\nb", 1, "a\nnew\nb"),         # a tight list stays tight
+                ("a\nb", 2, "a\nnew\nb"),
+                ("one two", 4, "one new two"),     # inside a line: joins the sentence
+                ("one two", 3, "one new two"),
+                ("ab", 1, "a new b"),
+                ("ab", 99, "ab\n\nnew")):
+            with self.subTest(content=content, at=at):
+                draft = store.save_draft(store.create_draft().id, content)
+                result = store.append_transcript(draft.id, uuid4().hex, "a.wav", " new\n", at)
+                self.assertEqual(result.content, expected)
 
     def test_empty_transcripts_are_retained_without_modifying_drafts(self):
         store = self.open_store()

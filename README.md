@@ -25,7 +25,7 @@
 1. Install the system packages (Ubuntu or Debian; other distributions have equivalents):
 
    ```sh
-   sudo apt install git python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 pipewire-bin
+   sudo apt install git python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 pipewire-bin
    ```
 
 2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), the Python package manager Dogspeak uses for its speech-recognition environment. It fetches the right Python version by itself.
@@ -61,13 +61,16 @@
 ### Dictation
 
 - **Record** (or **Super+R**, from any app) starts recording; press it again, or **Enter**, to stop. **Esc** cancels and throws the audio away.
-- The transcript is added to the current draft as a new paragraph. You can keep typing while it's being transcribed.
+- The transcript goes where your cursor is, and the cursor moves to the end of it, so the next recording carries on from there. Click anywhere in the draft to dictate into that spot: between lines it becomes its own line or paragraph, in the middle of a line it joins the sentence. A draft you open or go back to starts with the cursor at the end (**Ctrl+End** gets back there).
+- You can keep typing while it's being transcribed. If you're mid-word when it finishes, the transcript waits until you pause for a second.
+- A recording started while another app has focus, or with the window closed, goes at the end of the draft. So does an imported audio file.
 - A recording started while another app has focus is also put on the clipboard, so you can paste it straight away. Dogspeak never pastes for you.
 - Recordings stop automatically at 115 seconds. Audio files are deleted once transcribed.
 - Choose a microphone at the bottom right, or leave it on **System default**.
 
 ### Drafts
 
+- Lines are numbered; a long paragraph that wraps counts as one line. **Alt+Up** and **Alt+Down** move the current line or selected lines, also in the ☰ and right-click menus. A paragraph swaps with the next one and the blank line between them stays put; a line within a paragraph moves past its neighbour.
 - **Ctrl+N** new draft, **Ctrl+O** open a draft (the trash button deletes one, after asking), **Ctrl+Shift+C** copy the whole draft. Everything autosaves.
 - Closing the window only hides it; the model stays loaded so the next recording is instant. Bring it back from the microphone icon in the top bar or the app launcher. **Ctrl+Q** (or *Quit* in either menu) exits and frees the memory.
 
