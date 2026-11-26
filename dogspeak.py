@@ -88,11 +88,14 @@ class Pipeline:
 def memory_usage():
     """Current RSS and lifetime process high-water mark, both in bytes."""
     import psutil
-    import resource
     import sys
 
+    info = psutil.Process().memory_info()
+    if sys.platform == "win32":  # no resource module; Windows tracks the peak itself
+        return {"current_rss_bytes": info.rss, "process_peak_rss_bytes": int(info.peak_wset)}
+    import resource
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return {"current_rss_bytes": psutil.Process().memory_info().rss,
+    return {"current_rss_bytes": info.rss,
             "process_peak_rss_bytes": int(peak if sys.platform == "darwin" else peak * 1024)}
 
 

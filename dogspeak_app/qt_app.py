@@ -778,7 +778,10 @@ class SingleInstance:
             ctypes.windll.user32.AllowSetForegroundWindow(-1)
         socket.write((json.dumps(command) + '\n').encode('utf-8'))
         socket.waitForBytesWritten(timeout)
-        socket.disconnectFromServer()
+        # Hanging up at once can drop the line on Windows; the first instance hangs up
+        # after reading it.
+        if socket.state() != QLocalSocket.UnconnectedState:
+            socket.waitForDisconnected(timeout)
         return True
 
     def listen(self):

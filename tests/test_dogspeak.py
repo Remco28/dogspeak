@@ -304,6 +304,17 @@ class PipelineTests(unittest.TestCase):
 
 
 class BenchmarkTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "the Windows peak comes from psutil")
+    def test_windows_peak_memory_comes_from_the_working_set(self):
+        import dogspeak
+        import psutil
+        with mock.patch.object(psutil, "Process") as process:
+            process.return_value.memory_info.return_value.rss = 12345
+            process.return_value.memory_info.return_value.peak_wset = 67890
+            memory = dogspeak.memory_usage()
+        self.assertEqual(memory, {"current_rss_bytes": 12345, "process_peak_rss_bytes": 67890})
+
+    @unittest.skipIf(sys.platform == "win32", "Windows reports its peak through psutil; see the next test")
     def test_current_and_process_peak_memory_are_distinct_bytes(self):
         import dogspeak
         import psutil

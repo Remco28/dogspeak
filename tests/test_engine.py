@@ -32,6 +32,18 @@ runpy.run_path({str(ROOT / 'dogspeak_app' / 'worker.py')!r}, run_name="__main__"
 '''
 
 
+def gone(pid, timeout=5):
+    """True once pid has exited. On Windows a venv python.exe is a launcher whose child
+    (the real worker) ends a moment after the launcher does."""
+    try:
+        psutil.Process(pid).wait(timeout=timeout)
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.TimeoutExpired:
+        return False
+    return True
+
+
 class EngineTests(unittest.TestCase):
     def make_root(self, script=FAKE_WORKER):
         temporary = tempfile.TemporaryDirectory()
@@ -80,7 +92,7 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(all(tid != threading.get_ident() for tid in self.thread_ids))
         client.close()
         client.close()
-        self.assertFalse(psutil.pid_exists(child_pid))
+        self.assertTrue(gone(child_pid))
         self.assertTrue(self.events.empty(), "normal close must not emit fatal child death")
         if os.name == "posix":
             self.assertEqual((root / "private/engine.log").stat().st_mode & 0o777, 0o600)
@@ -144,7 +156,7 @@ class EngineTests(unittest.TestCase):
         started = time.monotonic()
         client.close()
         self.assertLess(time.monotonic() - started, 5)
-        self.assertFalse(psutil.pid_exists(ready["pid"]))
+        self.assertTrue(gone(ready["pid"]))
         self.assertTrue(self.events.empty())
 
     def test_close_during_start_does_not_leave_reader_or_worker(self):

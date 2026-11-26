@@ -93,7 +93,7 @@ class ClientTests(unittest.TestCase):
 
     def test_unreachable_and_misconfigured(self):
         with self.assertRaisesRegex(llm.LLMError, "Couldn't reach"):
-            llm.Client('http://127.0.0.1:9/v1', 'k', 'm', timeout=2).clean_up('text')
+            llm.Client('http://127.0.0.1:9/v1', 'k', 'm', timeout=10).clean_up('text')
         with self.assertRaisesRegex(llm.LLMError, 'No model'):
             self.client(model='').clean_up('text')
         with self.assertRaisesRegex(llm.LLMError, 'https://'):
