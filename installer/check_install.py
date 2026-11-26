@@ -10,6 +10,7 @@ the drafts, which are the person's and stay (a silent uninstall never deletes
 them). The script removes those test drafts at the end.
 """
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -86,6 +87,25 @@ def main(setup):
     print(result.stdout[-600:], result.stderr[-600:], sep="\n")
     check(result.returncode == 0 and "ask not what your country" in result.stdout,
           "the installed copy transcribes with the bundled model")
+
+    # Start the app as the Start menu shortcut does (headless here), with a throwaway
+    # data folder, and wait for the model to be ready.
+    trial = Path(os.environ.get("RUNNER_TEMP", os.environ["TEMP"])) / "dogspeak-trial"
+    shutil.rmtree(trial, ignore_errors=True)
+    app_env = dict(env, QT_QPA_PLATFORM="offscreen", DOGSPEAK_DATA_DIR=str(trial))
+    app = subprocess.Popen([str(PROGRAM / "python" / "pythonw.exe"), "-m", "dogspeak_app.qt_app"],
+                           cwd=str(PROGRAM), env=app_env)
+    log = trial / "logs" / "app.log"
+    try:
+        wait_until(lambda: log.exists() and "status ready" in log.read_text(encoding="utf-8"),
+                   180, "the installed app starts and loads the model")
+        check(True, "the installed app starts and loads the model")
+    finally:
+        print(log.read_text(encoding="utf-8") if log.exists() else "(no app.log)")
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(app.pid)], capture_output=True)
+        app.wait(timeout=30)
+        time.sleep(2)  # the worker ends with its launcher
+        shutil.rmtree(trial, ignore_errors=True)
 
     # What using Dogspeak leaves: drafts (the person's) and logs (the program's).
     (DATA / "logs").mkdir(parents=True, exist_ok=True)
