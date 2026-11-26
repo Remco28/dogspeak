@@ -64,6 +64,7 @@ def check(condition, what):
 
 
 def main(setup):
+    sys.stdout.reconfigure(errors="replace")  # CI consoles use a code page, not UTF-8
     setup = Path(setup).resolve()
     before = snapshot()
     check(APP_KEY not in before["uninstall keys"], "Dogspeak is not installed to begin with")
@@ -77,7 +78,7 @@ def main(setup):
     check(APP_KEY in uninstall_keys(), "listed in Apps & features")
     check(not (DESKTOP / "Dogspeak.lnk").exists(), "no desktop shortcut unless asked for")
 
-    env = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    env = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", PYTHONIOENCODING="utf-8")
     result = subprocess.run([str(PROGRAM / "python" / "python.exe"), str(PROGRAM / "dogspeak.py"),
                              "transcribe", str(ROOT / "samples" / "jfk.flac")],
                             capture_output=True, text=True, encoding="utf-8", errors="replace",
