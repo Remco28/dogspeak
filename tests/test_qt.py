@@ -351,5 +351,31 @@ class SingleInstanceTests(unittest.TestCase):
         self.assertEqual(second.wait(timeout=10), 0)
         self.assertEqual(received, [{'action': 'import-audio', 'path': 'C:\\clip.wav'}])
 
+    def test_many_hand_offs_all_arrive(self):
+        """Windows named pipes lost 3-10 of 20 lines before the first instance answered."""
+        import subprocess
+        import sys
+        from dogspeak_app.qt_app import SingleInstance
+        name = f'dogspeak-test-{uuid.uuid4().hex[:8]}'
+        first = SingleInstance(name)
+        self.assertTrue(first.listen())
+        self.addCleanup(first.close)
+        received = []
+        first.on_command = received.append
+        script = ('import sys; from PySide6.QtCore import QCoreApplication; '
+                  'from dogspeak_app.qt_app import SingleInstance; app = QCoreApplication([]); '
+                  f'sys.exit(0 if SingleInstance({name!r}).send('
+                  '{"action": "show", "n": int(sys.argv[1])}, timeout=5000) else 3)')
+        root = str(Path(__file__).resolve().parents[1])
+        for n in range(10):
+            second = subprocess.Popen([sys.executable, '-c', script, str(n)], cwd=root)
+            while second.poll() is None:
+                self.app.processEvents()
+                threading.Event().wait(0.005)
+            self.assertEqual(second.returncode, 0)
+            for _ in range(50):
+                self.app.processEvents()
+        self.assertEqual([c['n'] for c in received], list(range(10)))
+
 if __name__ == '__main__':
     unittest.main()

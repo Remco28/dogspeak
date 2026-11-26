@@ -63,6 +63,7 @@ def shortcut_target(link, run=subprocess.run):
 
 def install(root=ROOT, environ=os.environ, run=subprocess.run):
     data = app_data(environ)
+    created = not data.exists()
     data.mkdir(parents=True, exist_ok=True)
     link = start_menu(environ) / "Dogspeak.lnk"
     icon = data / "dogspeak.ico"
@@ -70,10 +71,15 @@ def install(root=ROOT, environ=os.environ, run=subprocess.run):
     if not target.exists():
         raise SystemExit("Run setup.cmd first: the Dogspeak environment is missing.")
     if link.exists() and Path(shortcut_target(link, run)).resolve() != target.resolve():
+        if created:
+            data.rmdir()
         raise SystemExit(f"{link} already exists and points somewhere else; nothing was changed.")
     ledger = data / "install.json"
-    ledger.write_text(json.dumps({"shortcut": str(link), "icon": str(icon),
-                                  "target": str(target)}, indent=2), encoding="utf-8")
+    previous = json.loads(ledger.read_text(encoding="utf-8")) if ledger.exists() else {}
+    # Remember who made the folder, so --uninstall can remove it if nothing else is in it.
+    created = previous.get("created_folder", created)
+    ledger.write_text(json.dumps({"shortcut": str(link), "icon": str(icon), "target": str(target),
+                                  "created_folder": created}, indent=2), encoding="utf-8")
     icon.write_bytes(build_ico({size: (Path(ICON_SOURCE) / f"{size}x{size}" / "apps"
                                        / f"{APP_ID}.png").read_bytes() for size in ICON_SIZES}))
     _powershell("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:DS_LINK); "
@@ -102,7 +108,12 @@ def uninstall(environ=os.environ, run=subprocess.run):
             print(f"Left {link}: it no longer points at Dogspeak.")
     icon.unlink(missing_ok=True)
     ledger.unlink()
-    print("Done. Your drafts are still in", data, "- delete that folder to remove them too.")
+    if record.get("created_folder") and not any(data.iterdir()):
+        data.rmdir()
+    if data.exists() and (data / "dogspeak.sqlite3").exists():
+        print("Done. Your drafts are still in", data, "- delete that folder to remove them too.")
+    else:
+        print("Done.")
 
 
 def main(argv=None):

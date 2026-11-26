@@ -767,23 +767,34 @@ class SingleInstance:
         self.server = None
         self.on_command = lambda command: None
 
-    def send(self, command, timeout=1000):
-        socket = QLocalSocket()
-        socket.connectToServer(self.name)
-        if not socket.waitForConnected(timeout):
-            return False
-        if paths.WINDOWS:
-            # Let the running instance bring its window to the front.
-            import ctypes
-            ctypes.windll.user32.AllowSetForegroundWindow(-1)
-        socket.write((json.dumps(command) + '\n').encode('utf-8'))
-        socket.flush()
-        socket.waitForBytesWritten(timeout)
-        # Hanging up at once can drop the line on Windows; the first instance hangs up
-        # after reading it.
-        if socket.state() != QLocalSocket.UnconnectedState:
-            socket.waitForDisconnected(timeout)
-        return True
+    def send(self, command, timeout=1000, attempts=3):
+        """Hand a command to the running Dogspeak. False only if none is running.
+
+        The first instance answers "ok" once it has the whole line; without that
+        answer a Windows named pipe can lose the line, so this tries again.
+        """
+        payload = (json.dumps(command) + '\n').encode('utf-8')
+        running = False
+        for _attempt in range(attempts):
+            socket = QLocalSocket()
+            socket.connectToServer(self.name)
+            if not socket.waitForConnected(timeout):
+                return running
+            running = True
+            if paths.WINDOWS:
+                # Let the running instance bring its window to the front.
+                import ctypes
+                ctypes.windll.user32.AllowSetForegroundWindow(-1)
+            socket.write(payload)
+            socket.flush()
+            socket.waitForBytesWritten(timeout)
+            reply = b''
+            while b'\n' not in reply and socket.waitForReadyRead(timeout):
+                reply += bytes(socket.readAll())
+            socket.disconnectFromServer()
+            if reply.startswith(b'ok'):
+                return True
+        return running
 
     def listen(self):
         QLocalServer.removeServer(self.name)  # left behind by a crash
@@ -793,22 +804,31 @@ class SingleInstance:
         return self.server.listen(self.name)
 
     def _connection(self):
-        socket = self.server.nextPendingConnection()
+        while (socket := self.server.nextPendingConnection()) is not None:
+            self._serve(socket)
+
+    def _serve(self, socket):
         buffer = bytearray()
+        done = []
 
         def read():
             buffer.extend(bytes(socket.readAll()))
-            if b'\n' in buffer:
-                line = bytes(buffer).split(b'\n', 1)[0]
-                try:
-                    command = json.loads(line.decode('utf-8'))
-                except ValueError:
-                    command = None
-                if isinstance(command, dict):
-                    self.on_command(command)
-                socket.disconnectFromServer()
+            if done or b'\n' not in buffer:
+                return
+            done.append(True)
+            line = bytes(buffer).split(b'\n', 1)[0]
+            try:
+                command = json.loads(line.decode('utf-8'))
+            except ValueError:
+                command = None
+            socket.write(b'ok\n' if isinstance(command, dict) else b'bad\n')
+            socket.flush()
+            if isinstance(command, dict):
+                # Answer first; the command may open dialogs or take a moment.
+                QTimer.singleShot(0, lambda: self.on_command(command))
         socket.readyRead.connect(read)
         socket.disconnected.connect(socket.deleteLater)
+        read()  # the line may already be here
 
     def close(self):
         if self.server is not None:

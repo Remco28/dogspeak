@@ -61,6 +61,21 @@ class WindowsInstallTests(unittest.TestCase):
                          [p for p in before if Path(self.base / p).is_file()])
         self.assertEqual((self.data / "dogspeak.sqlite3").read_text(), "drafts")
 
+    def test_uninstall_removes_the_folder_it_made_when_empty(self):
+        before = self.snapshot()
+        windows_install.install(self.checkout, self.environ, self.run)
+        windows_install.install(self.checkout, self.environ, self.run)  # again: same ledger
+        windows_install.uninstall(self.environ, self.run)
+        self.assertFalse(self.data.exists())
+        self.assertEqual([p for p in self.snapshot() if (self.base / p).is_file()],
+                         [p for p in before if (self.base / p).is_file()])
+
+    def test_uninstall_keeps_the_folder_once_dogspeak_has_used_it(self):
+        windows_install.install(self.checkout, self.environ, self.run)
+        (self.data / "dogspeak.sqlite3").write_text("drafts")
+        windows_install.uninstall(self.environ, self.run)
+        self.assertEqual((self.data / "dogspeak.sqlite3").read_text(), "drafts")
+
     def test_install_refuses_to_replace_someone_elses_shortcut(self):
         self.link.parent.mkdir(parents=True)
         self.link.write_text(json.dumps({"target": "C:/Other/app.exe"}))
