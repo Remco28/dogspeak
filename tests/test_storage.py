@@ -2,6 +2,7 @@ from uuid import uuid4
 """Storage contract tests; all databases live in disposable Hermes scratch dirs."""
 
 import dataclasses
+import sys
 import os
 from pathlib import Path
 import sqlite3
@@ -199,6 +200,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(reopened.get_setting(key), {"mode": "local", "ids": [1, 2]})
         self.assertEqual(reopened.list_drafts(), [])
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "POSIX permissions and symlinks; Windows profile folders are private by their access lists")
     def test_private_permissions_on_new_and_existing_storage(self):
         self.path = self.path.parent / "nested" / self.path.name
         old_umask = os.umask(0)
@@ -228,6 +230,7 @@ class StoreTests(unittest.TestCase):
                     ("missing", "orphan-job", "audio.wav", "orphan", "now"),
                 )
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "POSIX permissions and symlinks; Windows profile folders are private by their access lists")
     def test_database_symlink_is_rejected_without_modifying_target(self):
         target = Path(self.temp.name) / "unrelated.sqlite3"
         with sqlite3.connect(target) as connection:

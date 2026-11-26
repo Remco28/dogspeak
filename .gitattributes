@@ -1,0 +1,8 @@
+# LF everywhere, so shell scripts and byte-exact tests survive a Windows
+# checkout (Git for Windows defaults to core.autocrlf=true). cmd.exe needs CRLF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.flac binary
+*.ico binary

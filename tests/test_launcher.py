@@ -1,5 +1,6 @@
 """Launcher/desktop integration tests; never open a microphone."""
 import os
+import sys
 from pathlib import Path
 import subprocess
 import unittest
@@ -7,6 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "shell launchers and GNOME setup are Linux only")
 class LauncherTests(unittest.TestCase):
     def test_test_runner_exists_and_is_valid_executable_shell(self):
         runner = ROOT / "test.sh"
@@ -29,6 +31,7 @@ class LauncherTests(unittest.TestCase):
         self.assertNotIn("uv run", source)
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "shell launchers and GNOME setup are Linux only")
 class DesktopTests(unittest.TestCase):
     def test_desktop_entry_quotes_paths_and_has_record_action(self):
         import desktop_install

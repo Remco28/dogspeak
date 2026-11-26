@@ -1,5 +1,6 @@
 """Capture tests stub PipeWire only; these tests never open a microphone."""
 import importlib
+import sys
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import unittest
 from unittest import mock
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "PipeWire capture is Linux only")
 class RecorderTests(unittest.TestCase):
     def test_explicit_start_targets_stable_name_and_stop_finalizes_private_file(self):
         audio = importlib.import_module("dogspeak_app.audio")
@@ -181,6 +183,7 @@ while True:
                     recorder.cancel()
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "PipeWire capture is Linux only")
 class SourcesTests(unittest.TestCase):
     def test_only_physical_sources_use_stable_names_not_transient_ids(self):
         audio = importlib.import_module("dogspeak_app.audio")

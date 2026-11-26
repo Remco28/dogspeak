@@ -97,6 +97,7 @@ class CLITests(unittest.TestCase):
                     if not isinstance(error, KeyboardInterrupt):
                         self.assertIn(str(error), stderr.getvalue())
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "run.sh and pw-record are Linux only")
     def test_run_script_is_offline_and_uses_project_venv_from_other_directory(self):
         script = ROOT / "run.sh"
         self.assertTrue(script.is_file(), "run.sh is missing")
@@ -367,6 +368,7 @@ class BenchmarkTests(unittest.TestCase):
         json.dumps(result, allow_nan=False)
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "run.sh and pw-record are Linux only")
 class RecordingTests(unittest.TestCase):
     def test_pipewire_sigint_exit_one_accepts_valid_audio_not_early_failure(self):
         import dogspeak
