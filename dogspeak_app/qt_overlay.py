@@ -15,6 +15,7 @@ class Pill(QWidget):
                          | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setWindowTitle("Dogspeak status")
         self.setAccessibleName("Dogspeak status")
         self.state = self.title = self.hint = ""
         self.title_font = QFont(self.font())
@@ -25,6 +26,7 @@ class Pill(QWidget):
 
     def show_state(self, state, title, hint):
         self.state, self.title, self.hint = state, title, hint
+        self.setAccessibleDescription(f"{title} · {hint}" if hint else title)
         self._place()
         self.update()
         if not self.isVisible():

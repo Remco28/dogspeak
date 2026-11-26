@@ -282,7 +282,8 @@ class ScratchpadWindow(QMainWindow):
         self.status_label.setTextFormat(Qt.PlainText)
         self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.status_label.setWordWrap(True)
-        self.status_label.setAccessibleName('Status')
+        # The accessible name stays the text itself, so screen readers and UI tests read it.
+        self.status_label.setAccessibleDescription('Status')
         row.addWidget(self.status_label, 1)
         self.timer_label = QLabel()
         self.timer_label.setStyleSheet(d.CAPTION_STYLE)
