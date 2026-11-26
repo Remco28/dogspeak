@@ -58,6 +58,27 @@ macOS is not supported.
 
 ## Install on Windows
 
+Download **Dogspeak-<version>-Setup.exe** from the [latest release](https://github.com/Remco28/dogspeak/releases/latest) and run it. It installs for your account only, without administrator rights, and includes the speech model and its own Python, so nothing else is needed. Windows SmartScreen may warn that the installer isn't code-signed: click **More info**, then **Run anyway**. Start Dogspeak from the Start menu.
+
+On Windows, **Ctrl+Alt+R** records from any app (change it in Settings; Windows keeps Win+R for itself). The pill appears above the taskbar, and **Enter** and **Esc** stop or cancel while it records. Closing the window keeps Dogspeak in the tray (it may be in the taskbar's hidden-icons area; drag it out to keep it in view). **Ctrl+Q** or *Quit* in the tray menu exits and frees the memory. API keys go in Windows Credential Manager.
+
+If recordings come back as "only silence", Windows is blocking the microphone: turn on *Settings → Privacy & security → Microphone → Let desktop apps access your microphone*.
+
+### What the Windows installer changes
+
+| Change | Where | Undone by uninstall |
+|---|---|---|
+| The program, its own Python and the model | `%LOCALAPPDATA%\Programs\Dogspeak` | removed |
+| Start menu shortcut (desktop shortcut only if you tick it) | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Dogspeak.lnk` | removed |
+| Apps & features entry | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall` | removed |
+| Logs, written while Dogspeak runs | `%LOCALAPPDATA%\Dogspeak\logs` | removed |
+| Your drafts and settings, written while Dogspeak runs | `%LOCALAPPDATA%\Dogspeak` | kept, unless you answer Yes to "Also delete your drafts…" |
+| Your API keys | Windows Credential Manager, entries named "Dogspeak" | kept, unless you answer Yes |
+
+Nothing goes into the registry beyond the uninstall entry, nor into startup or PATH. Uninstall from *Settings → Apps → Installed apps → Dogspeak*. An update installs over the old version and keeps your drafts. Every build is checked in CI by installing it, transcribing with the installed copy, uninstalling and comparing the computer before and after (`installer/check_install.py`).
+
+### Run from source on Windows
+
 1. Install [Git for Windows](https://git-scm.com/download/win) and [uv](https://docs.astral.sh/uv/getting-started/installation/). uv fetches the right Python by itself.
 
 2. Clone and set up, in a terminal (cmd or PowerShell):
@@ -78,21 +99,7 @@ macOS is not supported.
    .venv\Scripts\python.exe windows_install.py
    ```
 
-On Windows, **Ctrl+Alt+R** records from any app (change it in Settings; Windows keeps Win+R for itself). The pill appears above the taskbar, and **Enter** and **Esc** stop or cancel while it records. Closing the window keeps Dogspeak in the tray (it may be in the taskbar's hidden-icons area; drag it out to keep it in view). **Ctrl+Q** or *Quit* in the tray menu exits and frees the memory. API keys go in Windows Credential Manager.
-
-If recordings come back as "only silence", Windows is blocking the microphone: turn on *Settings → Privacy & security → Microphone → Let desktop apps access your microphone*.
-
-### What the Windows installer changes
-
-`setup.cmd` changes nothing outside the Dogspeak folder except uv's download cache. `windows_install.py` adds the items below and records them in a ledger; `windows_install.py --uninstall` removes exactly those, and only if the shortcut still points at this folder.
-
-| Change | Where | Undone by |
-|---|---|---|
-| Start menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Dogspeak.lnk` | `--uninstall` |
-| Its icon | `%LOCALAPPDATA%\Dogspeak\dogspeak.ico` | `--uninstall` |
-| The ledger | `%LOCALAPPDATA%\Dogspeak\install.json` | `--uninstall` |
-
-Running Dogspeak keeps your drafts in `%LOCALAPPDATA%\Dogspeak` and its log in `%LOCALAPPDATA%\Dogspeak\logs`, and API keys in Credential Manager under "Dogspeak". To remove Dogspeak completely: run `--uninstall`, delete the Dogspeak folder you cloned, delete `%LOCALAPPDATA%\Dogspeak` (your drafts), and remove the "Dogspeak" entries in Credential Manager. Nothing is added to the registry, to startup or to PATH.
+The optional `windows_install.py` adds a Start menu entry for this checkout and records it in `%LOCALAPPDATA%\Dogspeak\install.json`; `windows_install.py --uninstall` removes exactly that, and only if the shortcut still points at this folder. Don't use it alongside the installer, which owns the same Start menu name.
 
 ## Using Dogspeak
 

@@ -27,8 +27,13 @@ DESKTOP = Path(os.environ["USERPROFILE"]) / "Desktop"
 
 
 def uninstall_keys():
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL) as key:
-        return {winreg.EnumKey(key, i) for i in range(winreg.QueryInfoKey(key)[0])}
+    """The entries in Apps & features for this user. A fresh profile has no such key yet;
+    Windows' own Uninstall key may then stay behind, empty, which is harmless."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, UNINSTALL) as key:
+            return {winreg.EnumKey(key, i) for i in range(winreg.QueryInfoKey(key)[0])}
+    except FileNotFoundError:
+        return set()
 
 
 def tree(path):
