@@ -24,13 +24,15 @@ jobs:
 
   gtk:
     # The GNOME window, on the distro's GTK and PyGObject, as Linux users run it.
-    runs-on: ubuntu-24.04
+    # Ubuntu 26.04 to match development; 24.04's older GTK fails three tests on main too.
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
     steps:
       - uses: actions/checkout@v4
       - run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 xvfb dbus
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 xvfb xauth dbus
       - run: >
-          xvfb-run -a dbus-run-session -- /usr/bin/python3
+          xvfb-run -a dbus-run-session -- python3
           -W ignore::DeprecationWarning:gi.events -W ignore::DeprecationWarning:gi.overrides
           -m unittest discover -s tests -p test_gui.py -v
