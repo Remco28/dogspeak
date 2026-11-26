@@ -674,7 +674,10 @@ class ScratchpadWindow(QMainWindow):
             self.controller.import_audio(path)
 
     def show_window(self):
-        self.showNormal()
+        """Bring the window forward as it was. showNormal() would also un-maximize it."""
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.show()
         self.raise_()
         self.activateWindow()
 
