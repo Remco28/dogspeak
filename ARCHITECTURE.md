@@ -151,8 +151,33 @@ private bus (`dbus-run-session` in test.sh) so they never drive the real pill.
   text with one buffer user action, so Ctrl+Z restores it. App actions
   `clean-up` (Ctrl+Shift+L) and `settings` (Ctrl+,).
 
+### Windows (Qt): qt_app.py, qt_editor.py, qt_cleanup.py, qt_overlay.py
+Same Controller and Cleanup as GTK, constructed in `qt_app.main` with a Qt
+`Dispatcher` (a queued signal) as `dispatch`. The window mirrors the GTK one:
+per-draft `QTextDocument`s keep their own undo; transcripts insert as one edit
+block at the cursor (Python offsets converted to Qt's UTF-16 positions by
+`qt_editor.to_qt/from_qt`); results wait for a pause in typing. The pill is a
+frameless, topmost, focus-less, click-through window (`qt_overlay.Pill`) with
+the GNOME pill's states and colours. `hotkeys.windows_hotkeys` registers the
+recording shortcut (setting `hotkey`, default Ctrl+Alt+R) on the window's HWND
+and holds Enter/Esc system-wide only while recording or transcribing, like the
+extension's key grabs. Closing hides to the tray. One instance per user:
+`SingleInstance` (a QLocalServer) takes `--toggle-recording`,
+`--import-audio FILE` and plain launches from a second process. Platform
+modules are chosen once in `qt_app.platform_parts`: `audio_portaudio.Recorder`
+(16 kHz mono via WASAPI's own conversion, else the device format; pure-zero
+audio is reported as the privacy switch), `credentials_keyring.Keyring`
+(Credential Manager). `paths.py` decides data (`%LOCALAPPDATA%\Dogspeak`),
+logs and the venv Python. The engine writes to the worker from a thread on
+Windows (no PIPE_BUF); child processes get `CREATE_NO_WINDOW`. Design values:
+`qt_design.py`; decisions: docs/DESIGN.md.
+
 ### launch
 `app.sh` launches /usr/bin/python3 -m dogspeak_app.gui from project root,
 without modifying PYTHONPATH, system packages, or inference environment.
+On Windows, `dogspeak.cmd` starts `.venv\Scripts\pythonw.exe -m
+dogspeak_app.qt_app`; `setup.cmd` runs `uv sync` and `fetch_models.py`
+(shared with setup.sh); `windows_install.py` adds a Start menu entry with a
+ledger and `--uninstall`.
 Tests run system Python for UI/storage and venv Python for real ASR. System
 GTK4/libadwaita/GtkSourceView5/PyGObject are runtime prerequisites. Preserve run.sh CLI.
