@@ -295,6 +295,23 @@ class QtWindowTests(unittest.TestCase):
         self.assertIn('API key', self.window.cleanup_view.banner_text.text())
         self.assertEqual(self.window.cleanup_view.banner_button.text(), 'Open Settings')
 
+    def test_keys_in_dialogs_reach_the_filter_without_error(self):
+        # Dialogs once kept the main window in self.window, hiding QWidget.window().
+        for dialog in (self.window.show_settings(), self.window.show_drafts()):
+            event = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+            self.assertFalse(self.window.eventFilter(dialog, event))
+            self.assertIs(dialog.window(), dialog)
+            dialog.reject()
+
+    def test_suggestions_button_shows_and_hides_the_panel(self):
+        view = self.window.cleanup_view
+        self.assertFalse(view.panel.isHidden())
+        view.panel_button.click()
+        self.assertTrue(view.panel.isHidden())
+        self.assertEqual(self.store.get_setting('suggestions_panel'), '0')
+        view.panel_button.click()
+        self.assertFalse(view.panel.isHidden())
+
     def test_settings_saves_the_key_and_refuses_a_taken_shortcut(self):
         from PySide6.QtGui import QKeySequence
         self.hotkeys.refuse = {'Ctrl+Alt+P'}

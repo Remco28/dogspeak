@@ -66,7 +66,7 @@ class Dispatcher(QObject):
 class DraftsDialog(QDialog):
     def __init__(self, window):
         super().__init__(window)
-        self.window = window
+        self.main = window  # an attribute called window would hide QWidget.window()
         self.setWindowTitle('Open a draft')
         self.resize(460, 440)
         layout = QVBoxLayout(self)
@@ -104,16 +104,16 @@ class DraftsDialog(QDialog):
         delete.setAutoRaise(True)
         delete.setToolTip('Delete draft')
         delete.setAccessibleName(f'Delete {draft.title or "Untitled"}')
-        delete.clicked.connect(lambda _=False, dr=draft, it=item: self.window.confirm_delete(dr, it, self))
+        delete.clicked.connect(lambda _=False, dr=draft, it=item: self.main.confirm_delete(dr, it, self))
         line.addWidget(delete)
         item.setSizeHint(row.sizeHint())
         self.rows.setItemWidget(item, row)
 
     def _open(self, item):
         draft_id = item.data(Qt.UserRole)
-        self.window.perform(lambda: self.window.controller.open_draft(draft_id))
+        self.main.perform(lambda: self.main.controller.open_draft(draft_id))
         self.accept()
-        self.window.editor.setFocus()
+        self.main.editor.setFocus()
 
 
 class ScratchpadWindow(QMainWindow):
@@ -714,6 +714,7 @@ class ScratchpadWindow(QMainWindow):
             return
         event.ignore()
         self.hide()
+        log.info('window hidden; still running')
         if self.tray is not None and not self._tray_hint_shown:
             self._tray_hint_shown = True
             self.tray.showMessage('Dogspeak is still running',
@@ -755,6 +756,7 @@ class ScratchpadWindow(QMainWindow):
     def quit_session(self):
         if self.closing:
             return
+        log.info('quitting')
         self._pause()
         if not self.controller.close(done=self._closed):
             self._resume()
@@ -892,6 +894,7 @@ def command_from(args):
 
 def run_command(window, command):
     action = command.get('action')
+    log.info('command from another launch: %s', action)
     if action == 'toggle-recording':
         window.perform(window.toggle_recording)
     elif action == 'import-audio' and isinstance(command.get('path'), str):

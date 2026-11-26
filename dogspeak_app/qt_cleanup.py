@@ -80,6 +80,7 @@ class CleanupView:
         self.revert_button.clicked.connect(lambda: window.perform(cleanup.revert))
         bar.addWidget(self.revert_button)
         self.version_menu = QToolButton()
+        self.version_menu.setObjectName('versions')
         self.version_menu.setText('No versions yet')
         self.version_menu.setToolTip('Versions of this draft (last 20)')
         self.version_menu.setPopupMode(QToolButton.InstantPopup)
@@ -104,12 +105,10 @@ class CleanupView:
 
         # Suggestions panel
         self.panel_button = QToolButton()
-        self.panel_button.setCheckable(True)
         self.panel_button.setToolTip('Show or hide suggestions')
         self.panel_button.setAccessibleName('Suggestions')
         show = cleanup.store.get_setting('suggestions_panel', '1') != '0'
-        self.panel_button.setChecked(show)
-        self.panel_button.toggled.connect(self._panel_toggled)
+        self.panel_button.clicked.connect(lambda: self.show_panel(self.panel.isHidden()))
         self.panel = QFrame()
         self.panel.setFrameShape(QFrame.NoFrame)
         self.panel.setFixedWidth(d.PANEL_WIDTH)
@@ -140,7 +139,7 @@ class CleanupView:
         head.addWidget(title, 1)
         hide = QPushButton('Hide')
         hide.setFlat(True)
-        hide.clicked.connect(lambda: self.panel_button.setChecked(False))
+        hide.clicked.connect(lambda: self.show_panel(False))
         head.addWidget(hide)
         column.addLayout(head)
         column.addWidget(caption('From the last clean up. Dismiss what you’ve dealt with.'))
@@ -199,7 +198,7 @@ class CleanupView:
             self.window.perform(self.cleanup.start)
         self.refresh()
 
-    def _panel_toggled(self, shown):
+    def show_panel(self, shown):
         self.panel.setVisible(shown)
         self.cleanup.store.set_setting('suggestions_panel', '1' if shown else '0')
 
@@ -267,7 +266,8 @@ class SettingsDialog(QDialog):
 
     def __init__(self, window, cleanup):
         super().__init__(window)
-        self.window, self.cleanup = window, cleanup
+        # Named main: an attribute called window would hide QWidget.window().
+        self.main, self.cleanup = window, cleanup
         self.setWindowTitle('Settings')
         self.setMinimumWidth(520)
         config = cleanup.config()
@@ -276,11 +276,16 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(d.SPACE_L)
 
+        # Wrapped notes go in a plain column: a form row doesn't give them their full height.
         model_group = QGroupBox('Clean up model')
-        form = QFormLayout(model_group)
+        column = QVBoxLayout(model_group)
+        column.setSpacing(d.SPACE_S)
+        column.addWidget(caption('Any service that speaks the OpenAI-style API, or Claude. Only '
+                                 'the Clean up button sends text; dictation never leaves this '
+                                 'computer.'))
+        form = QFormLayout()
         form.setSpacing(d.SPACE_S)
-        form.addRow(caption('Any service that speaks the OpenAI-style API, or Claude. Only the '
-                            'Clean up button sends text; dictation never leaves this computer.'))
+        column.addLayout(form)
         self.names = [name for name, _url, _key in llm.PROVIDERS]
         self.provider = QComboBox()
         self.provider.addItems(self.names)
@@ -295,17 +300,17 @@ class SettingsDialog(QDialog):
         form.addRow('API key', self.key)
         self.model = QLineEdit(config['model'])
         form.addRow('Model', self.model)
-        form.addRow(caption('The key is kept in Windows Credential Manager, not in Dogspeak’s '
-                            'files. OpenRouter model names look like provider/model '
-                            '(openrouter.ai/models); Claude model names look like '
-                            'claude-opus-5-5 or claude-haiku-5-5.'))
+        column.addWidget(caption('The key is kept in Windows Credential Manager, not in '
+                                 'Dogspeak’s files. OpenRouter model names look like '
+                                 'provider/model (openrouter.ai/models); Claude model names look '
+                                 'like claude-opus-5-5 or claude-haiku-5-5.'))
         test_row = QHBoxLayout()
         self.test_result = caption('Free: checks the key and model without using tokens.')
         test_row.addWidget(self.test_result, 1)
         self.test_button = QPushButton('Test')
         self.test_button.clicked.connect(self.test)
         test_row.addWidget(self.test_button, 0, Qt.AlignTop)
-        form.addRow(test_row)
+        column.addLayout(test_row)
         layout.addWidget(model_group)
 
         shortcut_group = QGroupBox('Recording shortcut')
@@ -332,7 +337,7 @@ class SettingsDialog(QDialog):
         self.clear = QPushButton('Clear recent')
         self.clear.setEnabled(bool(cleanup.recent_purposes()))
         self.clear.clicked.connect(lambda: (cleanup.clear_recent(), self.clear.setEnabled(False)))
-        purpose_row.addWidget(self.clear, 0, Qt.AlignTop)
+        purpose_row.addWidget(self.clear, 0, Qt.AlignVCenter)
         layout.addWidget(purposes)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -342,6 +347,13 @@ class SettingsDialog(QDialog):
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.address.textChanged.connect(self._address_changed)
         self._load_key(config['base_url'])
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Qt sizes a dialog without its wrapped notes; grow to what they need.
+        needed = self.layout().heightForWidth(self.width())
+        if needed > self.height():
+            self.resize(self.width(), needed)
 
     def _load_key(self, url):
         def work():
@@ -390,7 +402,7 @@ class SettingsDialog(QDialog):
         saved = self.cleanup.store.get_setting('hotkey', hotkeys.DEFAULT) or hotkeys.DEFAULT
         if not text or hotkeys.label(text) == saved:
             return None
-        return self.window.apply_shortcut(hotkeys.label(text))
+        return self.main.apply_shortcut(hotkeys.label(text))
 
     def test(self):
         try:

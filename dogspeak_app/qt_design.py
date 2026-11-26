@@ -70,4 +70,5 @@ def stylesheet():
     }}
     QPlainTextEdit {{ border: none; background: palette(base); }}
     QToolButton#menu::menu-indicator {{ image: none; width: 0; }}
+    QToolButton#versions {{ padding-right: {SPACE_L}px; }}
     """
