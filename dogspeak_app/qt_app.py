@@ -9,7 +9,10 @@ also runs on Linux for tests and development, without a global shortcut.
 import argparse
 import getpass
 import json
+import logging
+import logging.handlers
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -30,6 +33,7 @@ from .qt_editor import DraftEditor, to_qt
 from .qt_overlay import Pill
 
 APP_ID = 'io.github.Remco28.Dogspeak'
+log = logging.getLogger('dogspeak')
 IN_WINDOW_SHORTCUT = 'Ctrl+Shift+R'
 AUDIO_FILTER = 'Audio files (*.wav *.flac *.ogg *.mp3);;All files (*)'
 
@@ -148,7 +152,8 @@ class ScratchpadWindow(QMainWindow):
 
         c = controller
         c.on_draft = self.render_draft
-        c.on_status = self.render_status
+        c.on_status = self._status_changed
+        self._logged_status = None
         c.insertion_point = self._insertion_point
         c.hold_result = self._hold_result
         c.focused = lambda: self.isVisible() and self.isActiveWindow()
@@ -165,6 +170,8 @@ class ScratchpadWindow(QMainWindow):
         self.hotkeys = (hotkeys_factory or (lambda _w: hotkeys.NoHotkeys()))(self)
         self.shortcut_problem = self._register_shortcut(
             c.store.get_setting('hotkey', hotkeys.DEFAULT) or hotkeys.DEFAULT)
+        if self.shortcut_problem:
+            log.warning('shortcut: %s', self.shortcut_problem)
 
         self.render_draft(c.draft)
         self.cleanup_view.refresh()
@@ -469,6 +476,15 @@ class ScratchpadWindow(QMainWindow):
         """While Clean up rewrites this draft, it can't be edited."""
         self.editor.setReadOnly(locked)
         self.editor.setStyleSheet(f'QPlainTextEdit {{ {d.CAPTION_STYLE} }}' if locked else '')
+
+    def _status_changed(self):
+        # States and their wording only; transcripts never reach the status line.
+        c = self.controller
+        shown = (c.state, c.message)
+        if shown != self._logged_status:
+            self._logged_status = shown
+            log.info('status %s: %s', c.state, c.message)
+        self.render_status()
 
     def render_status(self):
         c = self.controller
@@ -885,6 +901,26 @@ def run_command(window, command):
         window.show_window()
 
 
+def start_log():
+    """app.log next to worker.log: states and errors, never what was said.
+
+    pythonw.exe has no console, so without this an error would vanish.
+    """
+    folder = paths.state_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(folder / 'app.log', maxBytes=256 * 1024,
+                                                   backupCount=1, encoding='utf-8')
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+    def unexpected(kind, value, trace):
+        log.error('unexpected error', exc_info=(kind, value, trace))
+        sys.__excepthook__(kind, value, trace)
+    sys.excepthook = unexpected
+    return handler
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='dogspeak', description='Dogspeak dictation scratchpad')
     parser.add_argument('--toggle-recording', action='store_true',
@@ -908,6 +944,8 @@ def main(argv=None):
     if instance.send(command):
         return 0
     instance.listen()
+    start_log()
+    log.info('started, pid %s', os.getpid())
 
     from .cleanup import Cleanup
     from .engine import EngineClient
@@ -934,6 +972,14 @@ def main(argv=None):
         window.shutdown()
         instance.close()
     app.aboutToQuit.connect(shutdown)
+    if hasattr(signal, 'SIGTERM') and not paths.WINDOWS:
+        # Ctrl+C or a plain kill quits like Ctrl+Q, so no recorder is left behind.
+        # Python only sees signals between Qt events, so wake it now and then.
+        for number in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(number, lambda *_: QTimer.singleShot(0, window.quit_session))
+        waker = QTimer(app, interval=500)
+        waker.timeout.connect(lambda: None)
+        waker.start()
     if command['action'] == 'toggle-recording':
         run_command(window, command)
     else:

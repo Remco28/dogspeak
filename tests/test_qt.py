@@ -161,6 +161,18 @@ class QtWindowTests(unittest.TestCase):
         self.assertTrue(self.window.record_button.isEnabled())
         self.assertEqual(self.window.microphone.itemText(1), 'USB microphone')
 
+    def test_status_changes_are_logged_once_each_without_transcripts(self):
+        with self.assertLogs('dogspeak', 'INFO') as logged:
+            self.ready()
+            self.window.render_status()
+            self.controller.tick()
+            self.window.show()
+            self.window.last_edit = float('-inf')
+            self.record_and_transcribe('a private sentence')
+        self.assertIn('INFO:dogspeak:status ready: Ready · Ctrl+Alt+R', logged.output)
+        self.assertEqual(len([line for line in logged.output if 'status ready: Ready' in line]), 2)
+        self.assertFalse(any('private sentence' in line for line in logged.output))
+
     def test_recording_shows_the_pill_and_holds_enter_and_esc_until_done(self):
         self.window.show()
         self.ready()

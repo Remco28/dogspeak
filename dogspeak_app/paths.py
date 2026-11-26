@@ -28,7 +28,10 @@ def data_dir():
 
 
 def state_dir():
-    """Logs."""
+    """Logs. With DOGSPEAK_DATA_DIR set (tests, trial runs) they go there too."""
+    override = os.environ.get("DOGSPEAK_DATA_DIR")
+    if override:
+        return Path(override) / "logs"
     if WINDOWS:
         return _local_appdata() / "Dogspeak" / "logs"
     return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "dogspeak"

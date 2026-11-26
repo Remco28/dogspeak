@@ -217,6 +217,8 @@ class PathTests(unittest.TestCase):
         os.environ["DOGSPEAK_DATA_DIR"] = "/tmp/elsewhere"
         try:
             self.assertEqual(paths.data_dir(), Path("/tmp/elsewhere"))
+            # A trial run's logs must not land in the real profile.
+            self.assertEqual(paths.state_dir(), Path("/tmp/elsewhere/logs"))
         finally:
             if old is None:
                 del os.environ["DOGSPEAK_DATA_DIR"]
