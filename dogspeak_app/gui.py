@@ -13,6 +13,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource  # noqa: E402
 
 from .controller import Controller as _Controller, MAX_IMPORT_BYTES, background, move_lines  # noqa: E402,F401
 from .paths import data_dir as _data_dir  # noqa: E402
+from .ui_values import CLIPBOARD_TIMEOUT_MS, FEEDBACK_SECONDS, MIN_WINDOW_WIDTH  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = 'io.github.Remco28.Dogspeak'
@@ -131,6 +132,8 @@ class ScratchpadWindow(Adw.ApplicationWindow):
                          default_height=720)
         self.controller = controller
         self.rendering, self.save_source, self.closing = False, 0, False
+        self.copy_clear_request = self.clear_toast = None
+        self.set_size_request(MIN_WINDOW_WIDTH, -1)
         self.last_edit, self.typing_pause = float('-inf'), 1.0
         self.drafts_dialog = self.save_error_dialog = self.settings_dialog = None
         if cleanup is None:
@@ -142,7 +145,8 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.cleanup_view = CleanupView(self, cleanup)
         self.displayed_draft = None
         layout = Adw.ToolbarView()
-        self.set_content(layout)
+        self.toasts = Adw.ToastOverlay(child=layout)
+        self.set_content(self.toasts)
         header = Adw.HeaderBar()
         self.title_entry = Gtk.Entry(placeholder_text='Draft title', width_chars=22,
                                      max_width_chars=36, hexpand=True)
@@ -166,6 +170,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         line_menu.append('Move Line Up', 'app.move-line-up')
         line_menu.append('Move Line Down', 'app.move-line-down')
         menu = Gio.Menu()
+        transfer_menu = Gio.Menu()
+        transfer_menu.append('Copy All', 'app.copy-all')
+        transfer_menu.append('Copy & Clear', 'app.copy-clear')
+        transfer_menu.append('Clear', 'app.clear')
+        menu.append_section(None, transfer_menu)
         menu.append_section(None, line_menu)
         menu.append('Settings', 'app.settings')
         menu.append('Quit', 'app.quit')
@@ -175,6 +184,9 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         header.pack_end(self.cleanup_view.panel_button)
         header.pack_end(Gtk.Button(icon_name='edit-copy-symbolic', action_name='app.copy-all',
                                    tooltip_text='Copy all (Ctrl+Shift+C)'))
+        self.copy_clear_button = Gtk.Button(label='Copy & Clear', action_name='app.copy-clear',
+                                            tooltip_text='Copy all text and clear this draft (Ctrl+Shift+X)')
+        header.pack_end(self.copy_clear_button)
         layout.add_top_bar(header)
         layout.add_top_bar(self.cleanup_view.bar)
         layout.add_top_bar(self.cleanup_view.banner)
@@ -349,6 +361,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
     def _changed(self, source=None):
         if self.rendering or self.closing:
             return
+        self._dismiss_clear_toast()
         if source is not self.title_entry:
             self.last_edit = self.controller.clock()
         self.controller.edit(self.title_entry.get_text(), self.buffer.get_text(
@@ -356,6 +369,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         if self.save_source:
             GLib.source_remove(self.save_source)
         self.save_source = GLib.timeout_add(500, self._autosave)
+        self._update_clear_actions()
 
     def _autosave(self):
         self.save_source = 0
@@ -365,6 +379,9 @@ class ScratchpadWindow(Adw.ApplicationWindow):
 
     def render_draft(self, draft, append=False, at=None):
         switching = self.displayed_draft != draft.id
+        self._dismiss_clear_toast()
+        if switching and self.copy_clear_request is not None:
+            self.copy_clear_request['changed'] = True
         self.displayed_draft = draft.id
         self.rendering = True
         try:
@@ -412,12 +429,14 @@ class ScratchpadWindow(Adw.ApplicationWindow):
             self.editor.grab_focus()
             if getattr(self, 'cleanup_view', None) is not None:
                 self.cleanup_view.refresh()
+        self._update_clear_actions()
 
     def replace_text(self, draft_id, text):
         """Swap a draft's whole text as one undoable step (Ctrl+Z brings it back)."""
         buffer = self.buffers.get(draft_id)
         if buffer is None:
             return
+        self._dismiss_clear_toast()
         self.rendering = True
         try:
             buffer.begin_user_action()
@@ -456,6 +475,96 @@ class ScratchpadWindow(Adw.ApplicationWindow):
                 self.status_label.set_text(f'Sending this draft to {name}… Esc cancels.')
                 self.spinner.set_spinning(True)
         self._sync_overlay()
+        self._update_clear_actions()
+
+    def _can_clear(self):
+        c = self.controller
+        return not (self.closing or c.closed or c.recording_job or c.pending
+                    or self.cleanup.busy or self.copy_clear_request) and bool(self.buffer.get_char_count())
+
+    def _update_clear_actions(self):
+        app = self.get_application()
+        if app is not None:
+            for name in ('copy-clear', 'clear'):
+                app.lookup_action(name).set_enabled(self._can_clear())
+
+    def _dismiss_clear_toast(self):
+        if self.clear_toast is not None:
+            self.clear_toast.dismiss()
+            self.clear_toast = None
+
+    def _feedback(self, message):
+        self.toasts.add_toast(Adw.Toast(title=message, timeout=FEEDBACK_SECONDS))
+
+    def clear_text(self, copied=False):
+        if not self._can_clear():
+            return
+        buffer = self.buffer
+        buffer.begin_user_action()
+        buffer.delete(buffer.get_start_iter(), buffer.get_end_iter())
+        buffer.end_user_action()
+        self.editor.grab_focus()
+        self.cleanup_view.refresh()
+        toast = Adw.Toast(title='Copied and cleared' if copied else 'Cleared',
+                          button_label='Undo', timeout=FEEDBACK_SECONDS)
+        self.clear_toast = toast
+
+        def undo(*_):
+            if self.clear_toast is toast and self.buffer is buffer and buffer.get_can_undo():
+                buffer.undo()
+                self.editor.grab_focus()
+        toast.connect('button-clicked', undo)
+        self.toasts.add_toast(toast)
+
+    def copy_and_clear(self):
+        if not self._can_clear():
+            return
+        buffer = self.buffer
+        text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
+        request = {'buffer': buffer, 'draft': self.displayed_draft, 'text': text,
+                   'changed': False, 'cancel': Gio.Cancellable(), 'timeout': 0}
+        request['handler'] = buffer.connect('changed', lambda *_: request.update(changed=True))
+        self.copy_clear_request = request
+        self._update_clear_actions()
+
+        def finished(clipboard, result):
+            try:
+                copied = clipboard.read_text_finish(result)
+                error = None if copied == text else 'Clipboard could not be verified. Text kept.'
+            except Exception:
+                error = 'Could not read the clipboard. Text kept.'
+            self._finish_copy_clear(request, error)
+
+        def timed_out():
+            request['timeout'] = 0
+            self._finish_copy_clear(request, 'Clipboard check timed out. Text kept.')
+            request['cancel'].cancel()
+            return False
+
+        try:
+            self.copy_all()
+            request['timeout'] = GLib.timeout_add(CLIPBOARD_TIMEOUT_MS, timed_out)
+            self.get_clipboard().read_text_async(request['cancel'], finished)
+        except Exception:
+            self._finish_copy_clear(request, 'Could not copy the text. Text kept.')
+
+    def _finish_copy_clear(self, request, error):
+        if self.copy_clear_request is not request:
+            return
+        self.copy_clear_request = None
+        request['buffer'].disconnect(request['handler'])
+        if request['timeout']:
+            GLib.source_remove(request['timeout'])
+        self._update_clear_actions()
+        if self.closing or self.controller.closed:
+            return
+        if error:
+            self._feedback(error)
+        elif (request['changed'] or not self.get_visible() or self.buffer is not request['buffer']
+              or self.displayed_draft != request['draft'] or not self._can_clear()):
+            self._feedback('Draft changed or busy. Text kept; copy again when ready.')
+        else:
+            self.clear_text(copied=True)
 
     def show_drafts(self):
         self.controller.flush()
@@ -534,6 +643,10 @@ class ScratchpadWindow(Adw.ApplicationWindow):
 
     def _pause_window(self):
         self.closing = True
+        if self.copy_clear_request is not None:
+            request = self.copy_clear_request
+            self._finish_copy_clear(request, None)
+            request['cancel'].cancel()
         for source in (self.save_source, self.tick_source):
             if source:
                 GLib.source_remove(source)
@@ -844,6 +957,8 @@ class DogspeakApplication(Adw.Application):
             ('new-draft', None, lambda: self.window.controller.new_draft()),
             ('open-draft', None, lambda: self.window.show_drafts()),
             ('copy-all', None, lambda: self.window.copy_all()),
+            ('copy-clear', None, lambda: self.window.copy_and_clear()),
+            ('clear', None, lambda: self.window.clear_text()),
             ('quit', None, lambda: self.window.quit_session()),
             ('clean-up', None, lambda: self.window.cleanup.start()),
             ('settings', None, lambda: self.window.show_settings()),
@@ -861,6 +976,7 @@ class DogspeakApplication(Adw.Application):
         for name, accelerators in {
             'toggle-recording': ['<Super>r', '<Control><Shift>r'], 'new-draft': ['<Control>n'],
             'open-draft': ['<Control>o'], 'copy-all': ['<Control><Shift>c'],
+            'copy-clear': ['<Control><Shift>x'],
             'quit': ['<Control>q'], 'clean-up': ['<Control><Shift>l'],
             'settings': ['<Control>comma'], 'move-line-up': ['<Alt>Up'],
             'move-line-down': ['<Alt>Down'],

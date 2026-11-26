@@ -1,0 +1,477 @@
+diff -ruN -x .venv -x .git /home/frank/.cache/dogspeak-review/r2/copy/dogspeak_app/gui.py /home/frank/.cache/dogspeak-review/r3/after/dogspeak_app/gui.py
+--- /home/frank/.cache/dogspeak-review/r2/copy/dogspeak_app/gui.py	2026-10-30 10:39:25.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r3/after/dogspeak_app/gui.py	2026-10-30 12:22:22.000000000 -0400
+@@ -28,6 +28,71 @@
+     return thread
+ 
+ 
++def move_lines(lines, first, last, down):
++    """Move lines[first..last] past their neighbour; (lines, first, new first) or None.
++
++    A whole paragraph swaps with the next one and every blank line stays put. A
++    line within a paragraph swaps with the next line, or at the paragraph's edge
++    joins the next paragraph. Moving back always undoes a move.
++    """
++    def blank(i):
++        return not lines[i].strip()
++
++    def block_start(i):
++        while i > 0 and not blank(i - 1):
++            i -= 1
++        return i
++
++    def block_end(i):
++        while i < len(lines) - 1 and not blank(i + 1):
++            i += 1
++        return i
++
++    if any(blank(i) for i in range(first, last + 1)):
++        while first <= last and blank(first):
++            first += 1
++        while last >= first and blank(last):
++            last -= 1
++        if first > last:
++            return None
++        first, last = block_start(first), block_end(last)
++    whole = block_start(first) == first and block_end(last) == last
++    unit = lines[first:last + 1]
++    if down:
++        after = last + 1
++        if after == len(lines):
++            return None
++        if not blank(after):
++            return lines[:first] + [lines[after]] + unit + lines[after + 1:], first, first + 1
++        start = after
++        while start < len(lines) and blank(start):
++            start += 1
++        if start == len(lines):
++            return None
++        gap = lines[after:start]
++        if not whole:
++            return lines[:first] + gap + unit + lines[start:], first, first + len(gap)
++        end = block_end(start)
++        other = lines[start:end + 1]
++        return (lines[:first] + other + gap + unit + lines[end + 1:], first,
++                first + len(other) + len(gap))
++    before = first - 1
++    if before < 0:
++        return None
++    if not blank(before):
++        return lines[:before] + unit + [lines[before]] + lines[last + 1:], first, before
++    end = before
++    while end >= 0 and blank(end):
++        end -= 1
++    if end < 0:
++        return None
++    gap = lines[end + 1:first]
++    if not whole:
++        return lines[:end + 1] + unit + gap + lines[last + 1:], first, end + 1
++    start = block_start(end)
++    return lines[:start] + unit + gap + lines[start:end + 1] + lines[last + 1:], first, start
++
++
+ OVERLAY_BUS = 'io.github.Remco28.Dogspeak.Overlay'
+ OVERLAY_PATH = '/io/github/Remco28/Dogspeak/Overlay'
+ OVERLAY_IFACE = 'io.github.Remco28.Dogspeak.Overlay'
+@@ -151,6 +216,9 @@
+         self.focused = lambda: True
+         # Where a transcript for the shown draft goes; None means the end of the draft.
+         self.insertion_point = lambda: None
++        # True if a result must wait for the user to stop typing; it is delivered again later.
++        self.hold_result = lambda event: False
++        self.held = {}
+         self.on_transcript = lambda text: None
+         # Drafts another feature (Clean up) is still writing to.
+         self.locked_drafts = lambda: set()
+@@ -206,12 +274,18 @@
+             job = self.pending.get(event.get('id'))
+             if job is None:
+                 return False
++            # Clean up keeps text that landed after what it sent, so stay at the end.
++            at = None
++            if (job.get('at_cursor') and job['draft_id'] == self.draft.id
++                    and job['draft_id'] not in self.locked_drafts()):
++                at = self.insertion_point()
++            if at is not None and self.hold_result(event):
++                self.held[event['id']] = event
++                self.status('transcribing', 'Waiting for you to pause typing…')
++                return False
++            self.held.pop(event['id'], None)
+             try:
+                 self.flush()
+-                # Clean up keeps text that landed after what it sent, so stay at the end.
+-                at = None
+-                if job['draft_id'] == self.draft.id and job['draft_id'] not in self.locked_drafts():
+-                    at = self.insertion_point()
+                 draft = self.store.append_transcript(
+                     job['draft_id'], event['id'], str(job['path']), event.get('text', ''), at)
+                 # Stored: the job is finished even if showing it fails below.
+@@ -395,10 +469,11 @@
+         try:
+             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+             self.recorder.start(path, target=self.source)
++            focused = self.focused()
+             self.recording_job = {
+                 'id': request_id, 'draft_id': self.draft.id, 'path': path,
+                 'submitted': False, 'started_at': self.clock(),
+-                'background': not self.focused()}
++                'at_cursor': focused, 'background': not focused}
+             self.outcome = None
+             self.status('recording', 'Recording')
+             return True
+@@ -529,6 +604,10 @@
+             return True
+         errors = []
+         save_error = None
++        if not discard:  # a transcript waiting for a pause in typing must not be lost
++            self.hold_result = lambda event: False
++            for event in list(self.held.values()):
++                self._event(event)
+         if discard:
+             self.dirty = False
+         else:
+@@ -590,6 +669,7 @@
+                          default_height=720)
+         self.controller = controller
+         self.rendering, self.save_source, self.closing = False, 0, False
++        self.last_edit, self.typing_pause = float('-inf'), 1.0
+         self.drafts_dialog = self.save_error_dialog = self.settings_dialog = None
+         if cleanup is None:
+             from .cleanup import Cleanup
+@@ -645,6 +725,7 @@
+                                      show_line_numbers=True, highlight_current_line=True)
+         self.editor.add_css_class('view')
+         self.editor.set_extra_menu(line_menu)
++        self.editor.connect('move-lines', self._move_lines)
+         Adw.StyleManager.get_default().connect('notify::dark', self._theme_changed)
+         # Scrolling does nothing until the view is laid out, so also do it when shown.
+         self.editor.connect('map', lambda *_: GLib.idle_add(self._show_cursor))
+@@ -677,6 +758,7 @@
+         self.controller.on_draft = self.render_draft
+         self.controller.on_status = self.render_status
+         self.controller.insertion_point = self._insertion_point
++        self.controller.hold_result = self._hold_result
+         self.set_hide_on_close(True)
+         self.connect('close-request', self._close_requested)
+         self._install_session_keys(self)
+@@ -714,16 +796,63 @@
+ 
+     def _insertion_point(self):
+         # With the window closed the cursor can't be seen, so it is no choice of the user's.
++        # Inside a word, the text goes after the word.
+         if not self.get_visible():
+             return None
+         _start, end = self.buffer.get_selection_bounds() or (None, None)
+         if end is None:
+             end = self.buffer.get_iter_at_mark(self.buffer.get_insert())
++        if end.inside_word() and not end.starts_word():
++            end.forward_word_end()
+         return end.get_offset()
+ 
++    def _hold_result(self, event):
++        wait = self.typing_pause - (self.controller.clock() - self.last_edit)
++        if wait <= 0:
++            return False
++        GLib.timeout_add(int(wait * 1000) + 1, self.controller._event, event)
++        return True
++
+     def move_line(self, down):
+         self.editor.emit('move-lines', down)
+ 
++    def _move_lines(self, editor, down):
++        # Replaces GtkSource's own move, which breaks up blank-line spacing.
++        editor.stop_emission_by_name('move-lines')
++        if not editor.get_editable():
++            return
++        buffer = self.buffer
++        cursor = buffer.get_iter_at_mark(buffer.get_insert())
++        bound = buffer.get_iter_at_mark(buffer.get_selection_bound())
++        start, end = sorted((cursor, bound), key=lambda i: i.get_offset())
++        last = end.get_line()
++        if end.starts_line() and last > start.get_line():
++            last -= 1  # a selection ending at a line's start doesn't include that line
++        lines = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True).split('\n')
++        moved = move_lines(lines, start.get_line(), last, down)
++        if moved is None:
++            return
++        new, first, new_first = moved
++        marks = [(mark.get_line() - first + new_first, mark.get_line_offset())
++                 for mark in (cursor, bound)]
++        top = next(i for i, (a, b) in enumerate(zip(lines, new)) if a != b)
++        bottom = len(lines) - next(
++            i for i, (a, b) in enumerate(zip(reversed(lines), reversed(new))) if a != b)
++        buffer.begin_user_action()
++        begin = buffer.get_iter_at_line(top)[1]
++        stop = buffer.get_iter_at_line(bottom - 1)[1]
++        if not stop.ends_line():
++            stop.forward_to_line_end()
++        buffer.delete(begin, stop)
++        buffer.insert(buffer.get_iter_at_line(top)[1], '\n'.join(new[top:bottom]))
++        buffer.end_user_action()
++
++        def position(line, column):
++            line = max(0, min(line, len(new) - 1))
++            return buffer.get_iter_at_line_offset(line, min(column, len(new[line])))[1]
++        buffer.select_range(position(*marks[0]), position(*marks[1]))
++        self._show_cursor()
++
+     def _set_sources(self, sources):
+         if self.closing:
+             return False
+@@ -752,9 +881,11 @@
+         except Exception as exc:
+             self.controller.status('error', str(exc))
+ 
+-    def _changed(self, *_):
++    def _changed(self, source=None):
+         if self.rendering or self.closing:
+             return
++        if source is not self.title_entry:
++            self.last_edit = self.controller.clock()
+         self.controller.edit(self.title_entry.get_text(), self.buffer.get_text(
+             self.buffer.get_start_iter(), self.buffer.get_end_iter(), True))
+         if self.save_source:
+@@ -790,6 +921,8 @@
+                 if draft.content != old[:start] + added + old[start:]:
+                     raise RuntimeError('Draft changed outside the editor; reopen it to reconcile')
+                 if added:
++                    cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert()).get_offset()
++                    bound = self.buffer.get_iter_at_mark(self.buffer.get_selection_bound()).get_offset()
+                     self.buffer.begin_user_action()
+                     self.buffer.insert(self.buffer.get_iter_at_offset(start), added)
+                     self.buffer.end_user_action()
+@@ -797,14 +930,18 @@
+                         # After the words, not their separator: they must stay in view.
+                         self.buffer.place_cursor(
+                             self.buffer.get_iter_at_offset(start + len(added.rstrip())))
++                    elif cursor != bound:
++                        self.buffer.select_range(self.buffer.get_iter_at_offset(cursor),
++                                                 self.buffer.get_iter_at_offset(bound))
+             else:
+                 self.buffer.set_enable_undo(False)
+                 self.buffer.set_text(draft.content)
+                 self.buffer.set_enable_undo(True)
+-                self.buffer.place_cursor(self.buffer.get_end_iter())
+             self.title_entry.set_text(draft.title)
+         finally:
+             self.rendering = False
++        if switching:
++            self.buffer.place_cursor(self.buffer.get_end_iter())
+         self._show_cursor()
+         if switching:
+             self.editor.grab_focus()
+diff -ruN -x .venv -x .git /home/frank/.cache/dogspeak-review/r2/copy/tests/test_gui.py /home/frank/.cache/dogspeak-review/r3/after/tests/test_gui.py
+--- /home/frank/.cache/dogspeak-review/r2/copy/tests/test_gui.py	2026-10-30 10:39:25.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r3/after/tests/test_gui.py	2026-10-30 12:22:22.000000000 -0400
+@@ -708,6 +708,7 @@
+         self.assertTrue(self.app.register(None))
+         self.app.activate()
+         self.window = self.app.window
++        self.window.typing_pause = 0
+         self.addCleanup(self.window.destroy)
+         self.pump()
+ 
+@@ -750,13 +751,16 @@
+         self.assertEqual(self.text(), '')
+         self.assertEqual(self.window.title_entry.get_text(), 'Title from GTK')
+ 
+-    def dictate(self, text):
++    def start_dictation(self, focused=True):
++        c = self.controller
+         self.engine.emit('ready')
+-        audio = self.root / 'input.wav'
+-        audio.write_bytes(b'audio')
+-        self.assertTrue(self.controller.import_audio(audio))
+-        _, request_id = self.engine.jobs[-1]
+-        self.engine.emit('result', id=request_id, text=text)
++        c.focused = lambda: focused
++        self.assertTrue(c.toggle_recording())
++        c.stop_recording()
++        return self.engine.jobs[-1][1]
++
++    def dictate(self, text, focused=True):
++        self.engine.emit('result', id=self.start_dictation(focused), text=text)
+ 
+     def set_text(self, text):
+         buf = self.window.buffer
+@@ -839,6 +843,99 @@
+         self.run_llm()
+         self.assertEqual(self.text(), 'Clean text.\n\nLate')
+ 
++    def test_dictation_started_from_another_app_goes_to_the_end(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.dictate('Elsewhere', focused=False)
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nElsewhere')
++        self.assertEqual(self.caret(), 5)
++
++    def test_imported_audio_goes_to_the_end(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.engine.emit('ready')
++        audio = self.root / 'input.wav'
++        audio.write_bytes(b'audio')
++        self.assertTrue(self.controller.import_audio(audio))
++        self.engine.emit('result', id=self.engine.jobs[-1][1], text='Imported')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nImported')
++
++    def test_dictation_inside_a_word_goes_after_the_word(self):
++        buf = self.window.buffer
++        self.set_text('hello world')
++        buf.place_cursor(buf.get_iter_at_offset(2))
++        self.dictate('there')
++        self.assertEqual(self.text(), 'hello there world')
++        buf.place_cursor(buf.get_iter_at_offset(len('hello there ')))
++        self.dictate('big')
++        self.assertEqual(self.text(), 'hello there big world')
++
++    def test_transcript_waits_for_a_pause_in_typing(self):
++        self.window.typing_pause = 0.2
++        self.set_text('First line\n\nI am typ')
++        request_id = self.start_dictation()
++        self.engine.emit('result', id=request_id, text='Spoken words.')
++        self.assertEqual(self.text(), 'First line\n\nI am typ')
++        self.assertIn('pause', self.window.status_label.get_text())
++        self.assertFalse(self.window.record_button.get_sensitive())
++        self.set_text('ing a word')
++        self.pump(lambda: 'Spoken' in self.text())
++        self.assertEqual(self.text(), 'First line\n\nI am typing a word\n\nSpoken words.')
++        self.assertEqual(self.controller.pending, {})
++        self.assertEqual(self.controller.held, {})
++
++    def test_waiting_transcript_can_be_dropped_with_esc(self):
++        self.window.typing_pause = 0.05
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Dropped')
++        self.assertTrue(self.controller.cancel_recording())
++        time.sleep(0.06)
++        self.pump()
++        self.assertEqual(self.text(), 'words')
++
++    def test_waiting_transcript_follows_its_draft_when_another_opens(self):
++        self.window.typing_pause = 0.05
++        origin = self.controller.draft.id
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        self.controller.new_draft()
++        self.pump(lambda: not self.controller.pending)
++        self.assertEqual(self.text(), '')
++        self.assertEqual(self.store.get_draft(origin).content, 'words\n\nSpoken')
++
++    def test_quitting_keeps_a_waiting_transcript(self):
++        self.window.typing_pause = 60
++        origin = self.controller.draft.id
++        database = self.root / 'kept.txt'
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        save = self.store.close
++        self.store.close = lambda: (database.write_text(self.store.get_draft(origin).content), save())
++        self.controller.close()
++        self.assertEqual(database.read_text(), 'words\n\nSpoken')
++
++    def test_hidden_append_leaves_a_selection_alone(self):
++        buf = self.window.buffer
++        self.set_text('Whole draft')
++        buf.select_range(buf.get_start_iter(), buf.get_end_iter())
++        self.window.set_visible(False)
++        self.dictate('Away')
++        start, end = buf.get_selection_bounds()
++        self.assertEqual((start.get_offset(), end.get_offset()), (0, len('Whole draft')))
++
++    def test_returning_to_a_draft_puts_the_cursor_at_its_end(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        origin = self.controller.draft.id
++        self.controller.new_draft()
++        self.controller.open_draft(origin)
++        self.assertEqual(self.caret(), len('First\n\nSecond'))
++        self.dictate('More')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nMore')
++
+     def test_opened_draft_starts_with_the_cursor_at_its_end(self):
+         c = self.controller
+         c.edit('Old', 'Some earlier text')
+@@ -850,22 +947,76 @@
+         self.dictate('More')
+         self.assertEqual(self.text(), 'Some earlier text\n\nMore')
+ 
++    def place(self, line, column=0):
++        buf = self.window.buffer
++        buf.place_cursor(buf.get_iter_at_line_offset(line, column)[1])
++
+     def test_lines_are_numbered_and_move_as_one_undoable_autosaved_step(self):
+         self.assertTrue(self.window.editor.get_show_line_numbers())
+         buf = self.window.buffer
+         self.set_text('one\ntwo\nthree')
+-        buf.place_cursor(buf.get_iter_at_line(1)[1])
++        self.place(1, 2)
+         self.app.activate_action('move-line-up', None)
+         self.assertEqual(self.text(), 'two\none\nthree')
++        self.assertEqual(self.caret(), 2)
+         self.pump(lambda: not self.controller.dirty)
+         self.assertEqual(self.store.get_draft(self.controller.draft.id).content, self.text())
+-        self.app.activate_action('move-line-down', None)
++        buf.undo()
+         self.assertEqual(self.text(), 'one\ntwo\nthree')
++        self.place(0)
+         self.app.activate_action('move-line-down', None)
+-        self.assertEqual(self.text(), 'one\nthree\ntwo')
++        self.assertEqual(self.text(), 'two\none\nthree')
+         self.window.editor.set_editable(False)  # as during Clean up
+         self.app.activate_action('move-line-up', None)
+-        self.assertEqual(self.text(), 'one\nthree\ntwo')
++        self.assertEqual(self.text(), 'two\none\nthree')
++
++    def test_gtksource_key_binding_gets_our_move_too(self):
++        self.set_text('aaa\n\nbbb')
++        self.place(0)
++        self.window.editor.emit('move-lines', True)
++        self.assertEqual(self.text(), 'bbb\n\naaa')
++
++    def test_paragraphs_swap_and_blank_lines_stay_where_they_were(self):
++        self.set_text('aaa\n\nbbb\n\nccc')
++        self.place(0, 1)
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'bbb\n\naaa\n\nccc')
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'bbb\n\nccc\n\naaa')
++        self.assertEqual(self.window.buffer.get_iter_at_mark(
++            self.window.buffer.get_insert()).get_line(), 4)
++        self.window.move_line(True)  # already last
++        self.assertEqual(self.text(), 'bbb\n\nccc\n\naaa')
++        self.window.move_line(False)
++        self.window.move_line(False)
++        self.assertEqual(self.text(), 'aaa\n\nbbb\n\nccc')
++        self.window.buffer.undo()
++        self.assertEqual(self.text(), 'bbb\n\naaa\n\nccc')
++
++    def test_selected_lines_move_and_stay_selected(self):
++        buf = self.window.buffer
++        self.set_text('a\nb\nc\nd')
++        buf.select_range(buf.get_iter_at_line(0)[1], buf.get_iter_at_line(2)[1])
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'c\na\nb\nd')
++        start, end = buf.get_selection_bounds()
++        self.assertEqual(buf.get_text(start, end, True), 'a\nb\n')
++
++    def test_move_lines_rules(self):
++        move = self.gui.move_lines
++        for lines, first, last, down, expected in (
++                (['a', 'b', '', 'c'], 1, 1, True, ['a', '', 'b', 'c']),
++                (['a', '', 'b', 'c'], 2, 2, False, ['a', 'b', '', 'c']),
++                (['a', '', 'b1', 'b2', '', 'c'], 0, 0, True, ['b1', 'b2', '', 'a', '', 'c']),
++                (['a', '', '', 'b'], 0, 0, True, ['b', '', '', 'a']),
++                (['a', '', 'b'], 0, 2, True, None),
++                (['', 'a', '', 'b'], 1, 1, False, None),
++                (['a', '', ''], 0, 0, True, None),
++                (['a', '', 'b'], 1, 1, True, None),
++                (['a1', 'a2', '', 'b', '', 'c'], 1, 3, True, ['c', '', 'a1', 'a2', '', 'b'])):
++            with self.subTest(lines=lines, first=first):
++                result = move(lines, first, last, down)
++                self.assertEqual(result and result[0], expected)
+ 
+     def test_reopen_keeps_undo_history_after_background_origin_result(self):
+         original = self.controller.draft.id

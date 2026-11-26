@@ -1,0 +1,21 @@
+## Findings
+
+**HIGH — Item 1’s “quitting delivers a waiting result first” conflicts with the existing shutdown path.** Start a recording, let transcription finish, and have the result enter the proposed one-second wait. Then press Ctrl+Q before the timer fires. `Controller.close()` immediately drops pending jobs and removes their audio; it does not wait for a deferred result to be delivered. That can lose the transcript. The same risk applies if the window closes through the quit flow while a result is waiting. The plan needs a shutdown path that actually drains waiting results before closing storage and the engine.
+
+**MEDIUM — Item 3 needs to move the cursor explicitly when reopening an already visited draft.** Open draft A, put the cursor in the middle, switch to draft B, then return to A. The GUI retains a buffer per draft; returning to A reuses that buffer and does not reset its cursor. “Like opening one for the first time” requires an explicit cursor move to the end on return.
+
+**MEDIUM — Item 1’s timer can race with shutdown unless result delivery and timer cancellation have a defined order.** Suppose a result arrives and is scheduled for one second later, then the user quits just before the timer callback runs. If shutdown begins first, the callback may encounter a closed controller or store; if shutdown drops the pending job first, the callback may find nothing to deliver. The plan states the desired outcome but doesn’t specify how the timer is drained or coordinated with close.
+
+## Item-by-item
+
+1. **Waiting for a one-second editing pause:** The goal is compatible with the existing “pending” behavior: pending work already blocks recording, imports, and Clean up; Esc drops pending jobs; draft deletion is rejected while a job targets that draft. The shutdown conflict above is the concrete data-loss case. Also, while a result waits, the user can switch drafts and continue editing; delivery must still target the original draft, and its insertion location must be recalculated against that draft’s current buffer rather than whichever draft is shown when the timer fires. Otherwise, text can go to the wrong place. This is a **HIGH** risk if it can silently insert into the wrong draft; the plan says to route through the controller again, but does not spell out how the original draft and location are preserved.
+
+2. **Moving paragraphs:** This is not in conflict with the current code’s use of `move-lines`; replacing that behavior on the same signal is the right area to address the stated behavior. The plan leaves a boundary case unresolved: if a selection contains a blank line, it’s unclear whether that selection is considered a block to move or rejected under “No move … on a blank line.” Until defined, a selection spanning paragraphs could move a different block than the user expects. That is **LOW**: unusual selection, likely visible and recoverable. I can’t identify a concrete data-loss scenario from the described swap rules alone.
+
+3. **Returning to a draft:** As above, current per-draft buffers preserve the prior cursor when switching back. Without an explicit end move, the stated behavior does not happen. **MEDIUM**, visibly wrong and easy to recover with Ctrl+End.
+
+4. **Appending at the end while preserving selection:** This matches the current behavior for an end append: the GUI inserts at the end without replacing the selection, and its existing test covers dictation after a selection. No concrete wrong-result scenario found in the plan’s stated case. Keep in mind that this case is distinct from cursor-targeted insertion: there the insertion point is the selection’s end, so it is expected to affect the cursor/selection position.
+
+5. **Choosing cursor vs end based on focus at recording start:** The controller already records whether the app had focus when recording began, and the window-hidden path already resolves insertion to the end. No conflict found. I don’t see a concrete wrong-placement scenario in the stated rules.
+
+**Overall:** The main plan-level data-loss gap is deferred results at quit. The main placement gap is making sure a delayed result retains its originating draft identity while recalculating an insertion position after edits. Item 3 also needs to account for the GUI’s retained buffers.

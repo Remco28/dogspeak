@@ -1,0 +1,1049 @@
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 543eb74..a1f417e 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -21,7 +21,7 @@ not HTTP. The UI never imports torch or runs inference in its event loop.
+ 
+ Single editable draft, new/reopen drafts, title, autosave, record/stop,
+ clear status/timer/error, copy all, native undo/redo, microphone selection.
+-Transcriptions append a paragraph to the originating draft without replacing
++Transcriptions go to the cursor of the originating draft without replacing
+ newer typing or leaking into a different selected draft. Keep ASR text; delete
+ finished or cancelled audio. Model load once per application session. Closing
+ the window hides it and keeps the worker; Quit stops the worker. No automatic
+@@ -39,10 +39,12 @@ These small interfaces keep UI, persistence, capture and engine replaceable.
+ - `Store(path)` SQLite connection, called on UI thread only.
+ - create_draft(title='Untitled') -> Draft; list_drafts() -> list[Draft];
+   get_draft(draft_id) -> Draft; save_draft(draft_id, content, title=None) -> Draft.
+-- append_transcript(draft_id, request_id, audio_path, text) -> Draft atomically
+-  stores untouched ASR segment and appends text once (request_id idempotent).
+-  Preserve existing content exactly as prefix. Add blank-line separation;
+-  empty transcript is stored but does not add blank paragraphs.
++- append_transcript(draft_id, request_id, audio_path, text, at=None) -> Draft
++  atomically stores untouched ASR segment and inserts text once at offset `at`,
++  or the end (request_id idempotent). Existing content is kept exactly around
++  it. transcript_insertion() picks the separators: spaces inside a line,
++  otherwise the gap the cursor sits in, a blank line by default; empty
++  transcript is stored but does not add blank paragraphs.
+ - list_segments(draft_id) -> list[dict]; list_revisions(draft_id) -> [] (no
+   content version history).
+ - forget_audio(request_id) clears the stored path after a finished job.
+@@ -74,8 +76,8 @@ These small interfaces keep UI, persistence, capture and engine replaceable.
+   stop worker on GUI shutdown, close pipes and no orphan model process.
+ 
+ ### gui.py
+-Gio/Adw single-instance application id io.github.Remco28.Dogspeak. Gtk.TextView
+-with undo, word wrap, generous margins, readable text; no webview. Toolbar
++Gio/Adw single-instance application id io.github.Remco28.Dogspeak. GtkSource.View
++(line numbers, move-lines; no highlighting language) with undo, word wrap, generous margins, readable text; no webview. Toolbar
+ new/open/copy/record and title, subtle status bar/microphone selector.
+ Keyboard Super+R (and Ctrl+Shift+R) toggles recording within app, Ctrl+N new draft,
+ Ctrl+Shift+C copy all, Enter stops an active recording, Escape cancels
+@@ -87,7 +89,15 @@ shortcut can record while another app is focused. Never defer an initial
+ toggle until model ready (no surprise delayed capture). Parent owns optional
+ shortcut integration. Backend events for pending requests map to origin draft
+ IDs; persist latest edits before applying result. Render append as Gtk buffer
+-insertion, not a full replacement that destroys editing/undo state. Keep
++insertion, not a full replacement that destroys editing/undo state. A result
++of a recording started with the window active goes to the shown draft's cursor
++(after any selection, which it does not replace; after the word, if inside one)
++and the cursor follows it. It waits, still pending, until edits have paused for
++a second; Controller.close delivers a waiting result, and if that save fails
++keeps its words as an unsaved edit. It goes to the end of the
++draft if the recording started elsewhere, it is an import, that draft isn't
++shown, the window is hidden, or Clean up is running on it. Showing a draft puts
++its cursor at the end. gui.move_lines replaces GtkSource's move-lines. Keep
+ editing available while engine loads/transcribes; disable duplicate
+ recording/jobs.
+ 
+@@ -129,7 +139,7 @@ private bus (`dbus-run-session` in test.sh) so they never drive the real pill.
+ - `cleanup.Cleanup(controller, credentials, client_factory)`: GTK-free. One
+   request at a time; the provider call runs via `spawn`, returns via
+   `dispatch`. Applies a result only if the origin draft still starts with what
+-  was sent (a transcript appended meanwhile is kept after the result). Versions
++  was sent (a transcript landing meanwhile goes to the end and is kept after the result). Versions
+   (SQLite `versions`, newest 20 per draft): "Original"/"Before clean up" before,
+   "Clean up · <purpose>" with suggestions after, "Your edits" when jumping
+   away from unsaved hand edits. Settings: `purpose`, `recent_purposes` (5,
+@@ -145,4 +155,4 @@ private bus (`dbus-run-session` in test.sh) so they never drive the real pill.
+ `app.sh` launches /usr/bin/python3 -m dogspeak_app.gui from project root,
+ without modifying PYTHONPATH, system packages, or inference environment.
+ Tests run system Python for UI/storage and venv Python for real ASR. System
+-GTK4/libadwaita/PyGObject are runtime prerequisites. Preserve run.sh CLI.
++GTK4/libadwaita/GtkSourceView5/PyGObject are runtime prerequisites. Preserve run.sh CLI.
+diff --git a/PRODUCT.md b/PRODUCT.md
+index 3599421..6363c99 100644
+--- a/PRODUCT.md
++++ b/PRODUCT.md
+@@ -24,8 +24,12 @@ Personal recordings and transcripts are never part of the public repository.
+ - Obvious Loading / Ready / Recording / Transcribing / Error state.
+ - Microphone selection including system default; never record before an
+   explicit user action or queue surprise capture during model loading.
+-- Whole-recording transcription; append a new paragraph without destroying
+-  edits made while inference runs or sending text into a different draft.
++- Whole-recording transcription, inserted at the cursor (which then follows it)
++  without destroying edits made while inference runs or sending text into a
++  different draft. It waits for a pause if the user is typing. A recording
++  started from another app, or with the window closed, goes at the end: the
++  cursor isn't in view. Showing a draft puts the cursor at the end.
++- Numbered lines; the current line or selection can be moved up and down.
+ - Separate inference process, keeping the model resident while the app runs.
+ - Copy all for transfer to a coding agent; nothing auto-pastes or auto-sends.
+ - Import existing audio for retrying recordings and testing the complete app.
+diff --git a/README.md b/README.md
+index 7e8ed13..6908855 100644
+--- a/README.md
++++ b/README.md
+@@ -25,7 +25,7 @@
+ 1. Install the system packages (Ubuntu or Debian; other distributions have equivalents):
+ 
+    ```sh
+-   sudo apt install git python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 pipewire-bin
++   sudo apt install git python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 pipewire-bin
+    ```
+ 
+ 2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), the Python package manager Dogspeak uses for its speech-recognition environment. It fetches the right Python version by itself.
+@@ -61,13 +61,16 @@
+ ### Dictation
+ 
+ - **Record** (or **Super+R**, from any app) starts recording; press it again, or **Enter**, to stop. **Esc** cancels and throws the audio away.
+-- The transcript is added to the current draft as a new paragraph. You can keep typing while it's being transcribed.
++- The transcript goes where your cursor is, and the cursor moves to the end of it, so the next recording carries on from there. Click anywhere in the draft to dictate into that spot: between lines it becomes its own line or paragraph, in the middle of a line it joins the sentence. A draft you open or go back to starts with the cursor at the end (**Ctrl+End** gets back there).
++- You can keep typing while it's being transcribed. If you're mid-word when it finishes, the transcript waits until you pause for a second.
++- A recording started while another app has focus, or with the window closed, goes at the end of the draft. So does an imported audio file.
+ - A recording started while another app has focus is also put on the clipboard, so you can paste it straight away. Dogspeak never pastes for you.
+ - Recordings stop automatically at 115 seconds. Audio files are deleted once transcribed.
+ - Choose a microphone at the bottom right, or leave it on **System default**.
+ 
+ ### Drafts
+ 
++- Lines are numbered; a long paragraph that wraps counts as one line. **Alt+Up** and **Alt+Down** move the current line or selected lines, also in the ☰ and right-click menus. A paragraph swaps with the next one and the blank line between them stays put; a line within a paragraph moves past its neighbour.
+ - **Ctrl+N** new draft, **Ctrl+O** open a draft (the trash button deletes one, after asking), **Ctrl+Shift+C** copy the whole draft. Everything autosaves.
+ - Closing the window only hides it; the model stays loaded so the next recording is instant. Bring it back from the microphone icon in the top bar or the app launcher. **Ctrl+Q** (or *Quit* in either menu) exits and frees the memory.
+ 
+diff --git a/SETUP.md b/SETUP.md
+index a65a6db..9de20fe 100644
+--- a/SETUP.md
++++ b/SETUP.md
+@@ -7,19 +7,19 @@ can check it or do it by hand. For the short version, see the
+ ## 1. System packages
+ 
+ The window runs on your distribution's own Python with PyGObject; it never
+-imports the speech-recognition packages. It needs GTK 4, libadwaita, the
+-Secret Service bindings (for storing Clean up API keys) and the PipeWire tools
++imports the speech-recognition packages. It needs GTK 4, libadwaita, GtkSourceView 5 (the
++editor), the Secret Service bindings (for storing Clean up API keys) and the PipeWire tools
+ `pw-record` and `pw-dump` (for recording and listing microphones). On Ubuntu or
+ Debian:
+ 
+ ```sh
+-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 pipewire-bin
++sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1 pipewire-bin
+ ```
+ 
+ Check with:
+ 
+ ```sh
+-/usr/bin/python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); gi.require_version('Secret','1'); from gi.repository import Gtk, Adw, Secret; print('ok')"
++/usr/bin/python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); gi.require_version('GtkSource','5'); gi.require_version('Secret','1'); from gi.repository import Gtk, Adw, GtkSource, Secret; print('ok')"
+ command -v pw-record pw-dump
+ ```
+ 
+diff --git a/dogspeak_app/gui.py b/dogspeak_app/gui.py
+index d3ca148..6b8c3fb 100644
+--- a/dogspeak_app/gui.py
++++ b/dogspeak_app/gui.py
+@@ -1,4 +1,5 @@
+ """Native, local Dogspeak scratchpad. Run with the system Python."""
++from dataclasses import replace
+ from pathlib import Path
+ import os
+ import stat
+@@ -12,7 +13,10 @@ import gi
+ 
+ gi.require_version('Gtk', '4.0')
+ gi.require_version('Adw', '1')
+-from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
++gi.require_version('GtkSource', '5')
++from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource  # noqa: E402
++
++from .storage import transcript_insertion  # noqa: E402
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ APP_ID = 'io.github.Remco28.Dogspeak'
+@@ -27,6 +31,71 @@ def background(fn):
+     return thread
+ 
+ 
++def move_lines(lines, first, last, down):
++    """Move lines[first..last] past their neighbour; (lines, first, new first) or None.
++
++    A whole paragraph swaps with the next one and every blank line stays put. A
++    line within a paragraph swaps with the next line, or at the paragraph's edge
++    joins the next paragraph. Moving back always undoes a move.
++    """
++    def blank(i):
++        return not lines[i].strip()
++
++    def block_start(i):
++        while i > 0 and not blank(i - 1):
++            i -= 1
++        return i
++
++    def block_end(i):
++        while i < len(lines) - 1 and not blank(i + 1):
++            i += 1
++        return i
++
++    if any(blank(i) for i in range(first, last + 1)):
++        while first <= last and blank(first):
++            first += 1
++        while last >= first and blank(last):
++            last -= 1
++        if first > last:
++            return None
++        first, last = block_start(first), block_end(last)
++    whole = block_start(first) == first and block_end(last) == last
++    unit = lines[first:last + 1]
++    if down:
++        after = last + 1
++        if after == len(lines):
++            return None
++        if not blank(after):
++            return lines[:first] + [lines[after]] + unit + lines[after + 1:], first, first + 1
++        start = after
++        while start < len(lines) and blank(start):
++            start += 1
++        if start == len(lines):
++            return None
++        gap = lines[after:start]
++        if not whole:
++            return lines[:first] + gap + unit + lines[start:], first, first + len(gap)
++        end = block_end(start)
++        other = lines[start:end + 1]
++        return (lines[:first] + other + gap + unit + lines[end + 1:], first,
++                first + len(other) + len(gap))
++    before = first - 1
++    if before < 0:
++        return None
++    if not blank(before):
++        return lines[:before] + unit + [lines[before]] + lines[last + 1:], first, before
++    end = before
++    while end >= 0 and blank(end):
++        end -= 1
++    if end < 0:
++        return None
++    gap = lines[end + 1:first]
++    if not whole:
++        return lines[:end + 1] + unit + gap + lines[last + 1:], first, end + 1
++    start = block_start(end)
++    return lines[:start] + unit + gap + lines[start:end + 1] + lines[last + 1:], first, start
++
++
+ OVERLAY_BUS = 'io.github.Remco28.Dogspeak.Overlay'
+ OVERLAY_PATH = '/io/github/Remco28/Dogspeak/Overlay'
+ OVERLAY_IFACE = 'io.github.Remco28.Dogspeak.Overlay'
+@@ -144,10 +213,15 @@ class Controller:
+         self.dirty = False
+         # Last finished job: 'saved', 'empty' or 'cancelled'; cleared when a new one starts.
+         self.outcome = None
+-        self.on_draft = lambda draft, append=False: None
++        self.on_draft = lambda draft, append=False, at=None: None
+         self.on_status = lambda: None
+         # Whether the editor has focus; recordings started elsewhere are copied when done.
+         self.focused = lambda: True
++        # Where a transcript for the shown draft goes; None means the end of the draft.
++        self.insertion_point = lambda: None
++        # True if a result must wait for the user to stop typing; it is delivered again later.
++        self.hold_result = lambda event: False
++        self.held = {}
+         self.on_transcript = lambda text: None
+         # Drafts another feature (Clean up) is still writing to.
+         self.locked_drafts = lambda: set()
+@@ -203,17 +277,27 @@ class Controller:
+             job = self.pending.get(event.get('id'))
+             if job is None:
+                 return False
++            # Clean up keeps text that landed after what it sent, so stay at the end.
++            at = None
++            if (job.get('at_cursor') and job['draft_id'] == self.draft.id
++                    and job['draft_id'] not in self.locked_drafts()):
++                at = self.insertion_point()
++            if at is not None and self.hold_result(event):
++                self.held[event['id']] = event
++                self.status('transcribing', 'Waiting for you to pause typing…')
++                return False
++            self.held.pop(event['id'], None)
+             try:
+                 self.flush()
+                 draft = self.store.append_transcript(
+-                    job['draft_id'], event['id'], str(job['path']), event.get('text', ''))
++                    job['draft_id'], event['id'], str(job['path']), event.get('text', ''), at)
+                 # Stored: the job is finished even if showing it fails below.
+                 self.pending.pop(event['id'])
+                 self._forget_audio(event['id'], job.get('path'))
+                 if draft.id == self.draft.id:
+                     self.draft = draft
+                     self.title, self.content = draft.title, draft.content
+-                    self.on_draft(draft, append=True)
++                    self.on_draft(draft, append=True, at=at)
+                 text = event.get('text', '').strip()
+                 self.outcome = 'saved' if text else 'empty'
+                 if text and job.get('background'):
+@@ -388,10 +472,11 @@ class Controller:
+         try:
+             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+             self.recorder.start(path, target=self.source)
++            focused = self.focused()
+             self.recording_job = {
+                 'id': request_id, 'draft_id': self.draft.id, 'path': path,
+                 'submitted': False, 'started_at': self.clock(),
+-                'background': not self.focused()}
++                'at_cursor': focused, 'background': not focused}
+             self.outcome = None
+             self.status('recording', 'Recording')
+             return True
+@@ -522,6 +607,12 @@ class Controller:
+             return True
+         errors = []
+         save_error = None
++        if not discard:  # a transcript waiting for a pause in typing must not be lost
++            self.hold_result = lambda event: False
++            for event in list(self.held.values()):
++                self._event(event)
++                if event['id'] in self.pending:
++                    self._keep_as_edit(event)
+         if discard:
+             self.dirty = False
+         else:
+@@ -566,6 +657,23 @@ class Controller:
+             self._closed(errors)
+         return self.closed
+ 
++    def _keep_as_edit(self, event):
++        """A transcript that wouldn't save becomes unsaved text, which close() protects."""
++        text = event.get('text', '').strip()
++        origin = self.pending[event['id']]['draft_id']
++        if text and origin != self.draft.id:
++            try:
++                content = self.store.get_draft(origin).content
++                self.store.save_draft(
++                    origin, content + transcript_insertion(content, len(content), text))
++                return
++            except Exception:
++                pass  # better in the wrong draft, in view, than gone
++        if text:
++            self.content += transcript_insertion(self.content, len(self.content), text)
++            self.dirty = True
++            self.on_draft(replace(self.draft, title=self.title, content=self.content), append=True)
++
+     def _closed(self, errors):
+         self._cleanup_done = True
+         self.shutdown_error = '; '.join(errors)
+@@ -583,6 +691,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+                          default_height=720)
+         self.controller = controller
+         self.rendering, self.save_source, self.closing = False, 0, False
++        self.last_edit, self.typing_pause = float('-inf'), 1.0
+         self.drafts_dialog = self.save_error_dialog = self.settings_dialog = None
+         if cleanup is None:
+             from .cleanup import Cleanup
+@@ -613,7 +722,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+         record_box.append(self.record_icon)
+         record_box.append(self.record_label)
+         self.record_button.set_child(record_box)
++        line_menu = Gio.Menu()
++        line_menu.append('Move Line Up', 'app.move-line-up')
++        line_menu.append('Move Line Down', 'app.move-line-down')
+         menu = Gio.Menu()
++        menu.append_section(None, line_menu)
+         menu.append('Settings', 'app.settings')
+         menu.append('Quit', 'app.quit')
+         header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu,
+@@ -625,14 +738,19 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+         layout.add_top_bar(header)
+         layout.add_top_bar(self.cleanup_view.bar)
+         layout.add_top_bar(self.cleanup_view.banner)
+-        self.buffer = Gtk.TextBuffer()
++        self.buffer = self._new_buffer()
+         self.buffers = {}
+-        self.buffer.set_enable_undo(True)
+-        self.editor = Gtk.TextView(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR,
+-                                   left_margin=40, right_margin=40, top_margin=28,
+-                                   bottom_margin=28, pixels_above_lines=3,
+-                                   pixels_below_lines=3, vexpand=True)
++        self.editor = GtkSource.View(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR,
++                                     left_margin=16, right_margin=40, top_margin=28,
++                                     bottom_margin=28, pixels_above_lines=3,
++                                     pixels_below_lines=3, vexpand=True,
++                                     show_line_numbers=True, highlight_current_line=True)
+         self.editor.add_css_class('view')
++        self.editor.set_extra_menu(line_menu)
++        self.editor.connect('move-lines', self._move_lines)
++        Adw.StyleManager.get_default().connect('notify::dark', self._theme_changed)
++        # Scrolling does nothing until the view is laid out, so also do it when shown.
++        self.editor.connect('map', lambda *_: GLib.idle_add(self._show_cursor))
+         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+         scroll.set_child(self.editor)
+         content = Gtk.Box()
+@@ -661,6 +779,8 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+         self.title_entry.connect('changed', self._changed)
+         self.controller.on_draft = self.render_draft
+         self.controller.on_status = self.render_status
++        self.controller.insertion_point = self._insertion_point
++        self.controller.hold_result = self._hold_result
+         self.set_hide_on_close(True)
+         self.connect('close-request', self._close_requested)
+         self._install_session_keys(self)
+@@ -677,6 +797,87 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+             GLib.idle_add(self._set_sources, sources)
+         controller.spawn(discover)
+ 
++    def _scheme(self):
++        dark = Adw.StyleManager.get_default().get_dark()
++        return GtkSource.StyleSchemeManager.get_default().get_scheme(
++            'Adwaita-dark' if dark else 'Adwaita')
++
++    def _new_buffer(self):
++        buffer = GtkSource.Buffer(highlight_matching_brackets=False,
++                                  style_scheme=self._scheme())
++        buffer.set_enable_undo(True)
++        return buffer
++
++    def _theme_changed(self, *_):
++        for buffer in self.buffers.values():
++            buffer.set_style_scheme(self._scheme())
++
++    def _show_cursor(self):
++        self.editor.scroll_mark_onscreen(self.buffer.get_insert())
++        return False
++
++    def _insertion_point(self):
++        # With the window closed the cursor can't be seen, so it is no choice of the user's.
++        # Inside a word, the text goes after the word.
++        if not self.get_visible():
++            return None
++        _start, end = self.buffer.get_selection_bounds() or (None, None)
++        if end is None:
++            end = self.buffer.get_iter_at_mark(self.buffer.get_insert())
++        if end.inside_word() and not end.starts_word():
++            end.forward_word_end()
++        return end.get_offset()
++
++    def _hold_result(self, event):
++        wait = self.typing_pause - (self.controller.clock() - self.last_edit)
++        if wait <= 0:
++            return False
++        GLib.timeout_add(int(wait * 1000) + 1, self.controller._event, event)
++        return True
++
++    def move_line(self, down):
++        self.editor.emit('move-lines', down)
++
++    def _move_lines(self, editor, down):
++        # Replaces GtkSource's own move, which breaks up blank-line spacing.
++        editor.stop_emission_by_name('move-lines')
++        if not editor.get_editable():
++            return
++        buffer = self.buffer
++        cursor = buffer.get_iter_at_mark(buffer.get_insert())
++        bound = buffer.get_iter_at_mark(buffer.get_selection_bound())
++        start, end = sorted((cursor, bound), key=lambda i: i.get_offset())
++        last = end.get_line()
++        if end.starts_line() and last > start.get_line():
++            last -= 1  # a selection ending at a line's start doesn't include that line
++        lines = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True).split('\n')
++        moved = move_lines(lines, start.get_line(), last, down)
++        if moved is None:
++            return
++        new, first, new_first = moved
++        marks = [(mark.get_line() - first + new_first, mark.get_line_offset())
++                 for mark in (cursor, bound)]
++        if new != lines:  # identical neighbours: only the cursor moves
++            top = next(i for i, (a, b) in enumerate(zip(lines, new)) if a != b)
++            bottom = len(lines) - next(
++                i for i, (a, b) in enumerate(zip(reversed(lines), reversed(new))) if a != b)
++            buffer.begin_user_action()
++            begin = buffer.get_iter_at_line(top)[1]
++            stop = buffer.get_iter_at_line(bottom - 1)[1]
++            if not stop.ends_line():
++                stop.forward_to_line_end()
++            buffer.delete(begin, stop)
++            buffer.insert(buffer.get_iter_at_line(top)[1], '\n'.join(new[top:bottom]))
++            buffer.end_user_action()
++
++        def position(line, column):
++            if line >= len(new):  # a selection's end, on the line after the moved text
++                return buffer.get_end_iter()
++            line = max(0, line)
++            return buffer.get_iter_at_line_offset(line, min(column, len(new[line])))[1]
++        buffer.select_range(position(*marks[0]), position(*marks[1]))
++        self._show_cursor()
++
+     def _set_sources(self, sources):
+         if self.closing:
+             return False
+@@ -705,9 +906,11 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+         except Exception as exc:
+             self.controller.status('error', str(exc))
+ 
+-    def _changed(self, *_):
++    def _changed(self, source=None):
+         if self.rendering or self.closing:
+             return
++        if source is not self.title_entry:
++            self.last_edit = self.controller.clock()
+         self.controller.edit(self.title_entry.get_text(), self.buffer.get_text(
+             self.buffer.get_start_iter(), self.buffer.get_end_iter(), True))
+         if self.save_source:
+@@ -720,7 +923,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+         self.cleanup_view.refresh()  # the shown version follows undo and typing
+         return False
+ 
+-    def render_draft(self, draft, append=False):
++    def render_draft(self, draft, append=False, at=None):
+         switching = self.displayed_draft != draft.id
+         self.displayed_draft = draft.id
+         self.rendering = True
+@@ -731,25 +934,30 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+                 append = True
+             else:
+                 if self.buffers:
+-                    self.buffer = Gtk.TextBuffer()
+-                    self.buffer.set_enable_undo(True)
++                    self.buffer = self._new_buffer()
+                     self.buffer.connect('changed', self._changed)
+                     self.editor.set_buffer(self.buffer)
+                 self.buffers[draft.id] = self.buffer
+             if append:
+                 old = self.buffer.get_text(self.buffer.get_start_iter(),
+                                            self.buffer.get_end_iter(), True)
+-                if not draft.content.startswith(old):
++                start = len(old) if at is None else at
++                added = draft.content[start:start + len(draft.content) - len(old)]
++                if draft.content != old[:start] + added + old[start:]:
+                     raise RuntimeError('Draft changed outside the editor; reopen it to reconcile')
+-                suffix = draft.content[len(old):]
+-                if suffix:
++                if added:
+                     cursor = self.buffer.get_iter_at_mark(self.buffer.get_insert()).get_offset()
+                     bound = self.buffer.get_iter_at_mark(self.buffer.get_selection_bound()).get_offset()
+                     self.buffer.begin_user_action()
+-                    self.buffer.insert(self.buffer.get_end_iter(), suffix)
++                    self.buffer.insert(self.buffer.get_iter_at_offset(start), added)
+                     self.buffer.end_user_action()
+-                    self.buffer.select_range(self.buffer.get_iter_at_offset(cursor),
+-                                             self.buffer.get_iter_at_offset(bound))
++                    if at is not None:
++                        # After the words, not their separator: they must stay in view.
++                        self.buffer.place_cursor(
++                            self.buffer.get_iter_at_offset(start + len(added.rstrip())))
++                    elif cursor != bound:
++                        self.buffer.select_range(self.buffer.get_iter_at_offset(cursor),
++                                                 self.buffer.get_iter_at_offset(bound))
+             else:
+                 self.buffer.set_enable_undo(False)
+                 self.buffer.set_text(draft.content)
+@@ -757,6 +965,9 @@ class ScratchpadWindow(Adw.ApplicationWindow):
+             self.title_entry.set_text(draft.title)
+         finally:
+             self.rendering = False
++        if switching:
++            self.buffer.place_cursor(self.buffer.get_end_iter())
++        self._show_cursor()
+         if switching:
+             self.editor.grab_focus()
+             if getattr(self, 'cleanup_view', None) is not None:
+@@ -1198,6 +1409,8 @@ class DogspeakApplication(Adw.Application):
+             ('clean-up', None, lambda: self.window.cleanup.start()),
+             ('settings', None, lambda: self.window.show_settings()),
+             ('show-window', None, lambda: self.window.present()),
++            ('move-line-up', None, lambda: self.window.move_line(False)),
++            ('move-line-down', None, lambda: self.window.move_line(True)),
+         ]:
+             action = Gio.SimpleAction.new(name, parameter)
+             action.connect('activate', lambda _a, _p, cb=callback: self._action(cb))
+@@ -1210,7 +1423,8 @@ class DogspeakApplication(Adw.Application):
+             'toggle-recording': ['<Super>r', '<Control><Shift>r'], 'new-draft': ['<Control>n'],
+             'open-draft': ['<Control>o'], 'copy-all': ['<Control><Shift>c'],
+             'quit': ['<Control>q'], 'clean-up': ['<Control><Shift>l'],
+-            'settings': ['<Control>comma'],
++            'settings': ['<Control>comma'], 'move-line-up': ['<Alt>Up'],
++            'move-line-down': ['<Alt>Down'],
+         }.items():
+             self.set_accels_for_action('app.' + name, accelerators)
+ 
+diff --git a/dogspeak_app/storage.py b/dogspeak_app/storage.py
+index e0a0a58..101e0b5 100644
+--- a/dogspeak_app/storage.py
++++ b/dogspeak_app/storage.py
+@@ -24,6 +24,18 @@ def _now():
+     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+ 
+ 
++def transcript_insertion(content, at, text):
++    """What to insert at offset `at`: words inside a line, otherwise a paragraph
++    matching the gap the cursor sits in (one newline stays one; default a blank line)."""
++    left, right = content[:at], content[at:]
++    if left and right and not left.endswith("\n") and not right.startswith("\n"):
++        return ("" if left[-1].isspace() else " ") + text + ("" if right[0].isspace() else " ")
++    before = len(left) - len(left.rstrip("\n"))
++    after = len(right) - len(right.lstrip("\n"))
++    gap = min(before + after, 2) or 2
++    return ("\n" * (gap - before) if left else "") + text + ("\n" * (gap - after) if right else "")
++
++
+ class Store:
+     """Own a database file and connection, used only by its creating UI thread.
+ 
+@@ -130,8 +142,9 @@ class Store:
+         )
+         return Draft(draft.id, title, content, updated_at)
+ 
+-    def append_transcript(self, draft_id, request_id, audio_path, text):
+-        """Append once per globally unique request ID; retries leave all drafts alone."""
++    def append_transcript(self, draft_id, request_id, audio_path, text, at=None):
++        """Add once per globally unique request ID, at offset `at` or else at the end;
++        retries leave all drafts alone."""
+         with self._connection:
+             self._connection.execute("BEGIN IMMEDIATE")
+             draft = self.get_draft(draft_id)
+@@ -146,7 +159,9 @@ class Store:
+             )
+             if not text.strip():
+                 return draft
+-            content = draft.content + ("\n\n" if draft.content else "") + text.strip()
++            at = len(draft.content) if at is None else min(at, len(draft.content))
++            content = (draft.content[:at] + transcript_insertion(draft.content, at, text.strip())
++                       + draft.content[at:])
+             return self._save_draft(draft, content)
+ 
+     def delete_draft(self, draft_id):
+diff --git a/setup.sh b/setup.sh
+index 089eff7..2aba2a8 100755
+--- a/setup.sh
++++ b/setup.sh
+@@ -6,8 +6,8 @@ set -eu
+ cd -- "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ 
+ missing=""
+-/usr/bin/python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); gi.require_version('Secret', '1'); from gi.repository import Gtk, Adw, Secret" 2>/dev/null \
+-  || missing="$missing python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1"
++/usr/bin/python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); gi.require_version('GtkSource', '5'); gi.require_version('Secret', '1'); from gi.repository import Gtk, Adw, GtkSource, Secret" 2>/dev/null \
++  || missing="$missing python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gtksource-5 gir1.2-secret-1"
+ if ! command -v pw-record >/dev/null || ! command -v pw-dump >/dev/null; then
+   missing="$missing pipewire-bin"
+ fi
+diff --git a/tests/test_gui.py b/tests/test_gui.py
+index 24eecf7..970f518 100644
+--- a/tests/test_gui.py
++++ b/tests/test_gui.py
+@@ -1,5 +1,6 @@
+ """Run with: xvfb-run -a /usr/bin/python3 -m unittest discover -s tests -p test_gui.py -v."""
+ import importlib
++import itertools
+ import os
+ 
+ # Xvfb must win over the developer's inherited WAYLAND_DISPLAY.
+@@ -708,6 +709,7 @@ class GtkTests(unittest.TestCase):
+         self.assertTrue(self.app.register(None))
+         self.app.activate()
+         self.window = self.app.window
++        self.window.typing_pause = 0
+         self.addCleanup(self.window.destroy)
+         self.pump()
+ 
+@@ -750,6 +752,355 @@ class GtkTests(unittest.TestCase):
+         self.assertEqual(self.text(), '')
+         self.assertEqual(self.window.title_entry.get_text(), 'Title from GTK')
+ 
++    def start_dictation(self, focused=True):
++        c = self.controller
++        self.engine.emit('ready')
++        c.focused = lambda: focused
++        self.assertTrue(c.toggle_recording())
++        c.stop_recording()
++        return self.engine.jobs[-1][1]
++
++    def dictate(self, text, focused=True):
++        self.engine.emit('result', id=self.start_dictation(focused), text=text)
++
++    def set_text(self, text):
++        buf = self.window.buffer
++        buf.begin_user_action()
++        buf.insert_at_cursor(text)
++        buf.end_user_action()
++
++    def caret(self):
++        buf = self.window.buffer
++        return buf.get_iter_at_mark(buf.get_insert()).get_offset()
++
++    def test_dictation_lands_at_the_cursor_which_then_follows_it(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        self.dictate('End')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nEnd')
++        self.assertEqual(self.caret(), len(self.text()))
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.dictate('Middle')
++        self.assertEqual(self.text(), 'First\n\nMiddle\n\nSecond\n\nEnd')
++        self.assertEqual(self.caret(), len('First\n\nMiddle'))
++        self.assertEqual(self.store.get_draft(self.controller.draft.id).content, self.text())
++        buf.undo()
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nEnd')
++
++    def test_cursor_stays_on_the_spoken_words_not_after_their_separator(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(7))
++        self.dictate('New')
++        self.assertEqual(self.text(), 'First\n\nNew\n\nSecond')
++        self.assertEqual(self.caret(), len('First\n\nNew'))
++        self.dictate('Next')
++        self.assertEqual(self.text(), 'First\n\nNew\n\nNext\n\nSecond')
++        self.assertEqual(self.caret(), len('First\n\nNew\n\nNext'))
++
++    def test_inline_dictation_in_a_row_keeps_single_spaces(self):
++        buf = self.window.buffer
++        self.set_text('one two')
++        buf.place_cursor(buf.get_iter_at_offset(3))
++        self.dictate('new')
++        self.dictate('more')
++        self.assertEqual(self.text(), 'one new more two')
++
++    def test_view_follows_dictation_down_a_long_draft(self):
++        self.set_text('\n'.join(f'Line {i}' for i in range(200)))
++        scroller = self.window.editor.get_parent().get_vadjustment()
++        self.window.buffer.place_cursor(self.window.buffer.get_start_iter())
++        self.pump(lambda: scroller.get_upper() > scroller.get_page_size() > 0)
++        scroller.set_value(0)
++        self.window.buffer.place_cursor(self.window.buffer.get_end_iter())
++        self.dictate('Bottom')
++        self.pump(lambda: scroller.get_value() > 0)
++
++    def test_dictation_after_a_selection_keeps_the_selected_text(self):
++        buf = self.window.buffer
++        self.set_text('Keep this words')
++        buf.select_range(buf.get_iter_at_offset(0), buf.get_iter_at_offset(9))
++        self.dictate('spoken')
++        self.assertEqual(self.text(), 'Keep this spoken words')
++        self.assertFalse(buf.get_has_selection())
++
++    def test_dictation_goes_to_the_end_while_the_window_is_closed(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.window.set_visible(False)
++        self.dictate('Away')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nAway')
++        self.assertEqual(self.caret(), 5)
++
++    def test_dictation_during_clean_up_stays_behind_what_was_sent(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.pump()
++        self.assertTrue(self.window.cleanup.start())
++        self.dictate('Late')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nLate')
++        self.run_llm()
++        self.assertEqual(self.text(), 'Clean text.\n\nLate')
++
++    def test_dictation_started_from_another_app_goes_to_the_end(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.dictate('Elsewhere', focused=False)
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nElsewhere')
++        self.assertEqual(self.caret(), 5)
++
++    def test_imported_audio_goes_to_the_end(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        self.engine.emit('ready')
++        audio = self.root / 'input.wav'
++        audio.write_bytes(b'audio')
++        self.assertTrue(self.controller.import_audio(audio))
++        self.engine.emit('result', id=self.engine.jobs[-1][1], text='Imported')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nImported')
++
++    def test_dictation_inside_a_word_goes_after_the_word(self):
++        buf = self.window.buffer
++        self.set_text('hello world')
++        buf.place_cursor(buf.get_iter_at_offset(2))
++        self.dictate('there')
++        self.assertEqual(self.text(), 'hello there world')
++        buf.place_cursor(buf.get_iter_at_offset(len('hello there ')))
++        self.dictate('big')
++        self.assertEqual(self.text(), 'hello there big world')
++
++    def test_transcript_waits_for_a_pause_in_typing(self):
++        self.window.typing_pause = 0.2
++        self.set_text('First line\n\nI am typ')
++        request_id = self.start_dictation()
++        self.engine.emit('result', id=request_id, text='Spoken words.')
++        self.assertEqual(self.text(), 'First line\n\nI am typ')
++        self.assertIn('pause', self.window.status_label.get_text())
++        self.assertFalse(self.window.record_button.get_sensitive())
++        self.set_text('ing a word')
++        self.pump(lambda: 'Spoken' in self.text())
++        self.assertEqual(self.text(), 'First line\n\nI am typing a word\n\nSpoken words.')
++        self.assertEqual(self.controller.pending, {})
++        self.assertEqual(self.controller.held, {})
++
++    def test_waiting_transcript_can_be_dropped_with_esc(self):
++        self.window.typing_pause = 0.05
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Dropped')
++        self.assertTrue(self.controller.cancel_recording())
++        time.sleep(0.06)
++        self.pump()
++        self.assertEqual(self.text(), 'words')
++
++    def test_waiting_transcript_follows_its_draft_when_another_opens(self):
++        self.window.typing_pause = 0.05
++        origin = self.controller.draft.id
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        self.controller.new_draft()
++        self.pump(lambda: not self.controller.pending)
++        self.assertEqual(self.text(), '')
++        self.assertEqual(self.store.get_draft(origin).content, 'words\n\nSpoken')
++
++    def test_quitting_keeps_a_waiting_transcript(self):
++        self.window.typing_pause = 60
++        origin = self.controller.draft.id
++        database = self.root / 'kept.txt'
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        save = self.store.close
++        self.store.close = lambda: (database.write_text(self.store.get_draft(origin).content), save())
++        self.controller.close()
++        self.assertEqual(database.read_text(), 'words\n\nSpoken')
++
++    def test_waiting_transcript_that_will_not_save_becomes_an_edit_on_quit(self):
++        self.window.typing_pause = 60
++        origin = self.controller.draft.id
++        kept = self.root / 'kept.txt'
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        def fail(*args):
++            raise OSError('disk full')
++        self.store.append_transcript = fail
++        save = self.store.close
++        self.store.close = lambda: (kept.write_text(self.store.get_draft(origin).content), save())
++        self.assertTrue(self.controller.close())
++        self.assertEqual(kept.read_text(), 'words\n\nSpoken')
++
++    def test_unsavable_waiting_transcript_stays_with_its_own_draft(self):
++        c = self.controller
++        self.window.typing_pause = 60
++        origin = c.draft.id
++        kept = self.root / 'kept.txt'
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        c.dispatch = lambda fn, *args: None  # the timer has not fired
++        c.new_draft()
++        other = c.draft.id
++        def fail(*args):
++            raise OSError('disk full')
++        c.draft = self.store.get_draft(other)
++        self.store.append_transcript = fail
++        save = self.store.close
++        self.store.close = lambda: (kept.write_text(repr((
++            self.store.get_draft(origin).content, self.store.get_draft(other).content))), save())
++        self.assertTrue(c.close())
++        self.assertEqual(kept.read_text(), repr(('words\n\nSpoken', '')))
++
++    def test_waiting_transcript_survives_refused_quit_and_retry(self):
++        self.window.typing_pause = 60
++        origin = self.controller.draft.id
++        kept = self.root / 'kept.txt'
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        def fail(*args):
++            raise OSError('disk full')
++        append, save_draft = self.store.append_transcript, self.store.save_draft
++        self.store.append_transcript = self.store.save_draft = fail
++        self.assertFalse(self.controller.close())
++        self.assertEqual(self.text(), 'words\n\nSpoken')  # Copy text includes it
++        self.store.append_transcript, self.store.save_draft = append, save_draft
++        save = self.store.close
++        self.store.close = lambda: (kept.write_text(self.store.get_draft(origin).content), save())
++        self.assertTrue(self.controller.close())
++        self.assertEqual(kept.read_text(), 'words\n\nSpoken')
++
++    def test_hidden_append_leaves_a_selection_alone(self):
++        buf = self.window.buffer
++        self.set_text('Whole draft')
++        buf.select_range(buf.get_start_iter(), buf.get_end_iter())
++        self.window.set_visible(False)
++        self.dictate('Away')
++        start, end = buf.get_selection_bounds()
++        self.assertEqual((start.get_offset(), end.get_offset()), (0, len('Whole draft')))
++
++    def test_returning_to_a_draft_puts_the_cursor_at_its_end(self):
++        buf = self.window.buffer
++        self.set_text('First\n\nSecond')
++        buf.place_cursor(buf.get_iter_at_offset(5))
++        origin = self.controller.draft.id
++        self.controller.new_draft()
++        self.controller.open_draft(origin)
++        self.assertEqual(self.caret(), len('First\n\nSecond'))
++        self.dictate('More')
++        self.assertEqual(self.text(), 'First\n\nSecond\n\nMore')
++
++    def test_opened_draft_starts_with_the_cursor_at_its_end(self):
++        c = self.controller
++        c.edit('Old', 'Some earlier text')
++        c.new_draft()
++        old = next(d.id for d in self.store.list_drafts() if d.title == 'Old')
++        c.open_draft(old)
++        self.assertEqual(self.text(), 'Some earlier text')
++        self.assertEqual(self.caret(), len('Some earlier text'))
++        self.dictate('More')
++        self.assertEqual(self.text(), 'Some earlier text\n\nMore')
++
++    def place(self, line, column=0):
++        buf = self.window.buffer
++        buf.place_cursor(buf.get_iter_at_line_offset(line, column)[1])
++
++    def test_lines_are_numbered_and_move_as_one_undoable_autosaved_step(self):
++        self.assertTrue(self.window.editor.get_show_line_numbers())
++        buf = self.window.buffer
++        self.set_text('one\ntwo\nthree')
++        self.place(1, 2)
++        self.app.activate_action('move-line-up', None)
++        self.assertEqual(self.text(), 'two\none\nthree')
++        self.assertEqual(self.caret(), 2)
++        self.pump(lambda: not self.controller.dirty)
++        self.assertEqual(self.store.get_draft(self.controller.draft.id).content, self.text())
++        buf.undo()
++        self.assertEqual(self.text(), 'one\ntwo\nthree')
++        self.place(0)
++        self.app.activate_action('move-line-down', None)
++        self.assertEqual(self.text(), 'two\none\nthree')
++        self.window.editor.set_editable(False)  # as during Clean up
++        self.app.activate_action('move-line-up', None)
++        self.assertEqual(self.text(), 'two\none\nthree')
++
++    def test_gtksource_key_binding_gets_our_move_too(self):
++        self.set_text('aaa\n\nbbb')
++        self.place(0)
++        self.window.editor.emit('move-lines', True)
++        self.assertEqual(self.text(), 'bbb\n\naaa')
++
++    def test_paragraphs_swap_and_blank_lines_stay_where_they_were(self):
++        self.set_text('aaa\n\nbbb\n\nccc')
++        self.place(0, 1)
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'bbb\n\naaa\n\nccc')
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'bbb\n\nccc\n\naaa')
++        self.assertEqual(self.window.buffer.get_iter_at_mark(
++            self.window.buffer.get_insert()).get_line(), 4)
++        self.window.move_line(True)  # already last
++        self.assertEqual(self.text(), 'bbb\n\nccc\n\naaa')
++        self.window.move_line(False)
++        self.window.move_line(False)
++        self.assertEqual(self.text(), 'aaa\n\nbbb\n\nccc')
++        self.window.buffer.undo()
++        self.assertEqual(self.text(), 'bbb\n\naaa\n\nccc')
++
++    def test_selected_lines_move_and_stay_selected(self):
++        buf = self.window.buffer
++        self.set_text('a\nb\nc\nd')
++        buf.select_range(buf.get_iter_at_line(0)[1], buf.get_iter_at_line(2)[1])
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'c\na\nb\nd')
++        start, end = buf.get_selection_bounds()
++        self.assertEqual(buf.get_text(start, end, True), 'a\nb\n')
++
++    def test_selection_moved_to_the_end_of_the_draft_moves_back(self):
++        buf = self.window.buffer
++        self.set_text('a\nb\n\nc')
++        buf.select_range(buf.get_iter_at_line(0)[1], buf.get_iter_at_line(2)[1])
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'c\n\na\nb')
++        start, end = buf.get_selection_bounds()
++        self.assertEqual(buf.get_text(start, end, True), 'a\nb')
++        self.window.move_line(False)
++        self.assertEqual(self.text(), 'a\nb\n\nc')
++
++    def test_moving_past_identical_lines_still_moves_the_cursor(self):
++        self.set_text('a\na\nb')
++        self.place(0)
++        self.window.move_line(True)
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'a\nb\na')
++
++    def test_moving_any_line_back_restores_the_text(self):
++        move = self.gui.move_lines
++        for size in range(1, 7):
++            for shape in itertools.product(('', 'x'), repeat=size):
++                lines = [f'{word}{i}' if word else '' for i, word in enumerate(shape)]
++                for line, word in enumerate(shape):
++                    moved = word and move(lines, line, line, True)
++                    if moved:
++                        new, _first, new_first = moved
++                        back = move(new, new_first, new_first, False)
++                        self.assertEqual(back and back[0], lines, (lines, line))
++
++    def test_move_lines_rules(self):
++        move = self.gui.move_lines
++        for lines, first, last, down, expected in (
++                (['a', 'b', '', 'c'], 1, 1, True, ['a', '', 'b', 'c']),
++                (['a', '', 'b', 'c'], 2, 2, False, ['a', 'b', '', 'c']),
++                (['a', '', 'b1', 'b2', '', 'c'], 0, 0, True, ['b1', 'b2', '', 'a', '', 'c']),
++                (['a', '', '', 'b'], 0, 0, True, ['b', '', '', 'a']),
++                (['a', '', 'b'], 0, 2, True, None),
++                (['', 'a', '', 'b'], 1, 1, False, None),
++                (['a', '', ''], 0, 0, True, None),
++                (['a', '', 'b'], 1, 1, True, None),
++                (['a1', 'a2', '', 'b', '', 'c'], 1, 3, True, ['c', '', 'a1', 'a2', '', 'b'])):
++            with self.subTest(lines=lines, first=first):
++                result = move(lines, first, last, down)
++                self.assertEqual(result and result[0], expected)
++
+     def test_reopen_keeps_undo_history_after_background_origin_result(self):
+         original = self.controller.draft.id
+         buf = self.window.buffer
+diff --git a/tests/test_storage.py b/tests/test_storage.py
+index 89a7455..129ccd2 100644
+--- a/tests/test_storage.py
++++ b/tests/test_storage.py
+@@ -1,3 +1,4 @@
++from uuid import uuid4
+ """Storage contract tests; all databases live in disposable Hermes scratch dirs."""
+ 
+ import dataclasses
+@@ -147,6 +148,28 @@ class StoreTests(unittest.TestCase):
+         self.assertEqual(reopened.list_segments(other.id), [])
+         self.assertEqual(reopened.list_revisions(other.id), [])
+ 
++    def test_transcript_goes_at_offset_and_respects_the_gap_it_lands_in(self):
++        store = self.open_store()
++        for content, at, expected in (
++                ("", None, "new"),
++                ("a", None, "a\n\nnew"),
++                ("a\n", None, "a\nnew"),           # the user's own line break is not doubled
++                ("a\n\n", None, "a\n\nnew"),
++                ("a\n\nb", 0, "new\n\na\n\nb"),
++                ("a\n\nb", 1, "a\n\nnew\n\nb"),   # end of a paragraph
++                ("a\n\nb", 2, "a\n\nnew\n\nb"),   # the blank line between two
++                ("a\n\nb", 3, "a\n\nnew\n\nb"),   # start of a paragraph
++                ("a\nb", 1, "a\nnew\nb"),         # a tight list stays tight
++                ("a\nb", 2, "a\nnew\nb"),
++                ("one two", 4, "one new two"),     # inside a line: joins the sentence
++                ("one two", 3, "one new two"),
++                ("ab", 1, "a new b"),
++                ("ab", 99, "ab\n\nnew")):
++            with self.subTest(content=content, at=at):
++                draft = store.save_draft(store.create_draft().id, content)
++                result = store.append_transcript(draft.id, uuid4().hex, "a.wav", " new\n", at)
++                self.assertEqual(result.content, expected)
++
+     def test_empty_transcripts_are_retained_without_modifying_drafts(self):
+         store = self.open_store()
+         for content in ("", "Existing text \n\n", "   "):

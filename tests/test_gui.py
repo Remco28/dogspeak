@@ -15,6 +15,7 @@ import sys
 import time
 import unittest
 import uuid
+from unittest import mock
 from pathlib import Path
 
 
@@ -1335,6 +1336,132 @@ class GtkTests(unittest.TestCase):
         clipboard.read_text_async(None, lambda clip, result: copied.append(clip.read_text_finish(result)))
         self.pump(lambda: bool(copied))
         self.assertEqual(copied[0], 'Copy this — exactly')
+
+    def test_copy_clear_verifies_native_clipboard_and_is_one_saved_undo_step(self):
+        win, buf = self.window, self.window.buffer
+        text = '  Copy this — exactly\n\nSecond paragraph.\n'
+        win.title_entry.set_text('Keep this title')
+        buf.begin_user_action()
+        buf.insert_at_cursor(text)
+        buf.end_user_action()
+        buf.select_range(buf.get_start_iter(), buf.get_iter_at_offset(4))
+        self.assertTrue(self.app.lookup_action('copy-clear').get_enabled())
+        self.assertEqual(self.app.get_accels_for_action('app.copy-clear'), ['<Shift><Control>x'])
+        self.app.activate_action('copy-clear', None)
+        self.pump(lambda: win.copy_clear_request is None)
+        self.assertEqual(self.text(), '')
+        self.assertEqual(win.clear_toast.get_title(), 'Copied and cleared')
+        copied = []
+        win.get_clipboard().read_text_async(None, lambda clip, result: copied.append(clip.read_text_finish(result)))
+        self.pump(lambda: bool(copied))
+        self.assertEqual(copied, [text])
+        self.pump(lambda: not self.controller.dirty)
+        draft = self.store.get_draft(self.controller.draft.id)
+        self.assertEqual((draft.title, draft.content), ('Keep this title', ''))
+        self.assertFalse(self.app.lookup_action('copy-clear').get_enabled())
+        win.clear_toast.emit('button-clicked')
+        self.assertEqual(self.text(), text)
+        self.pump(lambda: not self.controller.dirty)
+        self.assertEqual(self.store.get_draft(draft.id).content, text)
+        buf.redo()
+        self.assertEqual(self.text(), '')
+        buf.undo()
+        self.assertEqual(self.text(), text)
+
+    def deferred_clipboard(self):
+        clipboard = mock.Mock()
+        pending = []
+        clipboard.read_text_async.side_effect = lambda cancel, callback: pending.append(callback)
+        patch = mock.patch.object(self.window, 'get_clipboard', return_value=clipboard)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return clipboard, pending
+
+    def test_copy_clear_keeps_text_on_clipboard_mismatch_or_error(self):
+        clipboard, pending = self.deferred_clipboard()
+        self.window.buffer.insert_at_cursor('Keep me')
+        for result in ('previous clipboard', RuntimeError('read failed')):
+            self.window.copy_and_clear()
+            if isinstance(result, Exception):
+                clipboard.read_text_finish.side_effect = result
+            else:
+                clipboard.read_text_finish.return_value = result
+            pending.pop()(clipboard, object())
+            self.assertEqual(self.text(), 'Keep me')
+            self.assertIsNone(self.window.copy_clear_request)
+            self.assertTrue(self.app.lookup_action('copy-clear').get_enabled())
+
+    def test_copy_clear_timeout_ignores_a_late_success(self):
+        clipboard, pending = self.deferred_clipboard()
+        self.window.buffer.insert_at_cursor('Keep me')
+        clipboard.read_text_finish.return_value = 'Keep me'
+        with mock.patch.object(self.gui, 'CLIPBOARD_TIMEOUT_MS', 1):
+            self.window.copy_and_clear()
+            self.pump(lambda: self.window.copy_clear_request is None)
+        pending.pop()(clipboard, object())
+        self.assertEqual(self.text(), 'Keep me')
+
+    def test_copy_clear_does_not_clear_after_edit_or_switch_back(self):
+        clipboard, pending = self.deferred_clipboard()
+        win, c = self.window, self.controller
+        win.buffer.insert_at_cursor('Original')
+        clipboard.read_text_finish.return_value = 'Original'
+        win.copy_and_clear()
+        self.assertFalse(self.app.lookup_action('clear').get_enabled())
+        win.buffer.insert_at_cursor(' edited')
+        pending.pop()(clipboard, object())
+        self.assertEqual(self.text(), 'Original edited')
+        win.copy_and_clear()
+        clipboard.read_text_finish.return_value = 'Original edited'
+        original = c.draft.id
+        c.new_draft()
+        c.open_draft(original)
+        pending.pop()(clipboard, object())
+        self.assertEqual(self.text(), 'Original edited')
+
+    def test_clear_actions_are_disabled_during_recording_transcription_and_cleanup(self):
+        win, c = self.window, self.controller
+        win.buffer.insert_at_cursor('Keep me')
+        self.engine.emit('ready')
+        c.toggle_recording()
+        self.assertFalse(self.app.lookup_action('copy-clear').get_enabled())
+        self.assertFalse(self.app.lookup_action('clear').get_enabled())
+        win.clear_text()
+        self.assertEqual(self.text(), 'Keep me')
+        c.stop_recording()
+        self.assertFalse(self.app.lookup_action('copy-clear').get_enabled())
+        c.cancel_recording()
+        self.assertTrue(self.app.lookup_action('copy-clear').get_enabled())
+        self.assertTrue(win.cleanup.start())
+        self.assertFalse(self.app.lookup_action('copy-clear').get_enabled())
+        win.copy_and_clear()
+        self.assertIsNone(win.copy_clear_request)
+        win.cleanup.cancel()
+        self.assertTrue(self.app.lookup_action('copy-clear').get_enabled())
+
+    def test_copy_clear_aborts_if_recording_starts_during_verification(self):
+        clipboard, pending = self.deferred_clipboard()
+        win = self.window
+        win.buffer.insert_at_cursor('Keep me')
+        clipboard.read_text_finish.return_value = 'Keep me'
+        win.copy_and_clear()
+        self.engine.emit('ready')
+        self.controller.toggle_recording()
+        pending.pop()(clipboard, object())
+        self.assertEqual(self.text(), 'Keep me')
+
+    def test_clear_leaves_clipboard_alone_and_dismisses_stale_undo(self):
+        win = self.window
+        win.buffer.insert_at_cursor('Old text')
+        clipboard, _pending = self.deferred_clipboard()
+        self.app.activate_action('clear', None)
+        self.assertEqual(self.text(), '')
+        self.assertEqual(win.clear_toast.get_title(), 'Cleared')
+        toast = win.clear_toast
+        win.buffer.insert_at_cursor('New text')
+        toast.emit('button-clicked')
+        self.assertEqual(self.text(), 'New text')
+        clipboard.set.assert_not_called()
 
     def test_remote_command_line_forwards_import_and_toggle(self):
         audio = self.root / 'relative.wav'

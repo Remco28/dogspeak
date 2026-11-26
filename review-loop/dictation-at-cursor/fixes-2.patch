@@ -1,0 +1,143 @@
+diff -ruN -x __pycache__ /home/frank/.cache/dogspeak-review/r3/after/dogspeak_app/gui.py /home/frank/.cache/dogspeak-review/r4/after/dogspeak_app/gui.py
+--- /home/frank/.cache/dogspeak-review/r3/after/dogspeak_app/gui.py	2026-10-30 12:22:22.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r4/after/dogspeak_app/gui.py	2026-10-30 12:26:35.000000000 -0400
+@@ -604,10 +604,13 @@
+             return True
+         errors = []
+         save_error = None
++        unsaved = []
+         if not discard:  # a transcript waiting for a pause in typing must not be lost
+             self.hold_result = lambda event: False
+             for event in list(self.held.values()):
+                 self._event(event)
++                if event['id'] in self.pending:
++                    unsaved.append(event.get('text', ''))
+         if discard:
+             self.dirty = False
+         else:
+@@ -615,6 +618,8 @@
+                 self.flush()
+             except Exception as exc:
+                 save_error = f'Could not save draft: {exc}'
++            if unsaved and not save_error:
++                save_error = 'Could not save this transcript: “' + ' '.join(unsaved) + '”'
+         # A refused close releases owned processes, not the unsaved editor/store.
+         self.stopping = True
+         self.ready = False
+@@ -835,20 +840,23 @@
+         new, first, new_first = moved
+         marks = [(mark.get_line() - first + new_first, mark.get_line_offset())
+                  for mark in (cursor, bound)]
+-        top = next(i for i, (a, b) in enumerate(zip(lines, new)) if a != b)
+-        bottom = len(lines) - next(
+-            i for i, (a, b) in enumerate(zip(reversed(lines), reversed(new))) if a != b)
+-        buffer.begin_user_action()
+-        begin = buffer.get_iter_at_line(top)[1]
+-        stop = buffer.get_iter_at_line(bottom - 1)[1]
+-        if not stop.ends_line():
+-            stop.forward_to_line_end()
+-        buffer.delete(begin, stop)
+-        buffer.insert(buffer.get_iter_at_line(top)[1], '\n'.join(new[top:bottom]))
+-        buffer.end_user_action()
++        if new != lines:  # identical neighbours: only the cursor moves
++            top = next(i for i, (a, b) in enumerate(zip(lines, new)) if a != b)
++            bottom = len(lines) - next(
++                i for i, (a, b) in enumerate(zip(reversed(lines), reversed(new))) if a != b)
++            buffer.begin_user_action()
++            begin = buffer.get_iter_at_line(top)[1]
++            stop = buffer.get_iter_at_line(bottom - 1)[1]
++            if not stop.ends_line():
++                stop.forward_to_line_end()
++            buffer.delete(begin, stop)
++            buffer.insert(buffer.get_iter_at_line(top)[1], '\n'.join(new[top:bottom]))
++            buffer.end_user_action()
+ 
+         def position(line, column):
+-            line = max(0, min(line, len(new) - 1))
++            if line >= len(new):  # a selection's end, on the line after the moved text
++                return buffer.get_end_iter()
++            line = max(0, line)
+             return buffer.get_iter_at_line_offset(line, min(column, len(new[line])))[1]
+         buffer.select_range(position(*marks[0]), position(*marks[1]))
+         self._show_cursor()
+diff -ruN -x __pycache__ /home/frank/.cache/dogspeak-review/r3/after/tests/test_gui.py /home/frank/.cache/dogspeak-review/r4/after/tests/test_gui.py
+--- /home/frank/.cache/dogspeak-review/r3/after/tests/test_gui.py	2026-10-30 12:22:22.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r4/after/tests/test_gui.py	2026-10-30 12:27:06.000000000 -0400
+@@ -1,5 +1,6 @@
+ """Run with: xvfb-run -a /usr/bin/python3 -m unittest discover -s tests -p test_gui.py -v."""
+ import importlib
++import itertools
+ import os
+ 
+ # Xvfb must win over the developer's inherited WAYLAND_DISPLAY.
+@@ -916,6 +917,17 @@
+         self.controller.close()
+         self.assertEqual(database.read_text(), 'words\n\nSpoken')
+ 
++    def test_quit_refuses_when_a_waiting_transcript_cannot_be_saved(self):
++        self.window.typing_pause = 60
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        def fail(*args):
++            raise OSError('disk full')
++        self.store.append_transcript = fail
++        self.assertFalse(self.controller.close())
++        self.assertIn('Spoken', self.controller.message)
++        self.assertFalse(self.controller.closed)
++
+     def test_hidden_append_leaves_a_selection_alone(self):
+         buf = self.window.buffer
+         self.set_text('Whole draft')
+@@ -1002,6 +1014,36 @@
+         start, end = buf.get_selection_bounds()
+         self.assertEqual(buf.get_text(start, end, True), 'a\nb\n')
+ 
++    def test_selection_moved_to_the_end_of_the_draft_moves_back(self):
++        buf = self.window.buffer
++        self.set_text('a\nb\n\nc')
++        buf.select_range(buf.get_iter_at_line(0)[1], buf.get_iter_at_line(2)[1])
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'c\n\na\nb')
++        start, end = buf.get_selection_bounds()
++        self.assertEqual(buf.get_text(start, end, True), 'a\nb')
++        self.window.move_line(False)
++        self.assertEqual(self.text(), 'a\nb\n\nc')
++
++    def test_moving_past_identical_lines_still_moves_the_cursor(self):
++        self.set_text('a\na\nb')
++        self.place(0)
++        self.window.move_line(True)
++        self.window.move_line(True)
++        self.assertEqual(self.text(), 'a\nb\na')
++
++    def test_moving_any_line_back_restores_the_text(self):
++        move = self.gui.move_lines
++        for size in range(1, 7):
++            for shape in itertools.product(('', 'x'), repeat=size):
++                lines = [f'{word}{i}' if word else '' for i, word in enumerate(shape)]
++                for line, word in enumerate(shape):
++                    moved = word and move(lines, line, line, True)
++                    if moved:
++                        new, _first, new_first = moved
++                        back = move(new, new_first, new_first, False)
++                        self.assertEqual(back and back[0], lines, (lines, line))
++
+     def test_move_lines_rules(self):
+         move = self.gui.move_lines
+         for lines, first, last, down, expected in (
+--- /home/frank/.cache/dogspeak-review/r3/after/ARCHITECTURE.md	2026-10-30 12:21:47.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r4/after/ARCHITECTURE.md	2026-10-30 12:26:35.000000000 -0400
+@@ -90,10 +90,11 @@
+ shortcut integration. Backend events for pending requests map to origin draft
+ IDs; persist latest edits before applying result. Render append as Gtk buffer
+ insertion, not a full replacement that destroys editing/undo state. A result
+-of a recording started with the editor focused goes to the shown draft's cursor
++of a recording started with the window active goes to the shown draft's cursor
+ (after any selection, which it does not replace; after the word, if inside one)
+ and the cursor follows it. It waits, still pending, until edits have paused for
+-a second; Controller.close delivers a waiting result. It goes to the end of the
++a second; Controller.close delivers a waiting result, and refuses to close if
++that save fails, showing the transcript. It goes to the end of the
+ draft if the recording started elsewhere, it is an import, that draft isn't
+ shown, the window is hidden, or Clean up is running on it. Showing a draft puts
+ its cursor at the end. gui.move_lines replaces GtkSource's move-lines. Keep

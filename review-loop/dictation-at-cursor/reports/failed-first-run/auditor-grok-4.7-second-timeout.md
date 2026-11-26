@@ -1,0 +1,1 @@
+I'll audit the patch hunk by hunk against the before and after copies, then try the scenarios that look like they could regress.The patch is in. Next I’ll read the insertion, render, and editor paths in both copies and check for places the new behavior was only half applied.
