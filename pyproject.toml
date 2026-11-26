@@ -1,7 +1,7 @@
 [project]
 name = "dogspeak"
 version = "0.2.0"
-description = "Local dictation scratchpad for Linux/GNOME that turns rambling speech into clear prompts"
+description = "Local dictation scratchpad for Linux (GNOME) and Windows that turns rambling speech into clear prompts"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -14,7 +14,16 @@ dependencies = [
   "psutil>=7",
   "librosa>=0.11",
   "anthropic>=1,<2",
+  # Windows runs the whole app in this environment: a Qt window, microphone
+  # capture through PortAudio, and API keys in Windows Credential Manager.
+  "PySide6-Essentials>=6.8; sys_platform == 'win32'",
+  "sounddevice>=0.5; sys_platform == 'win32'",
+  "keyring>=25; sys_platform == 'win32'",
 ]
+
+[dependency-groups]
+# The Qt window's tests also run on Linux, headless.
+dev = ["PySide6-Essentials>=6.8"]
 
 [tool.uv]
 package = false

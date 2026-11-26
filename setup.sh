@@ -22,40 +22,10 @@ if ! command -v uv >/dev/null; then
 fi
 
 echo "Building the inference environment (.venv)…"
-uv sync --frozen
+uv sync --frozen --no-dev
 
 echo "Fetching model files…"
-/usr/bin/python3 - <<'PY'
-import hashlib, json, sys, urllib.request
-from pathlib import Path
-
-def digest(path):
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-files = json.loads(Path("upstream.json").read_text())["files"]
-wanted = {p: f for p, f in files.items()
-          if (p.startswith("models/") or p == "samples/jfk.flac") and f.get("url")}
-for name, info in wanted.items():
-    path = Path(name)
-    if path.exists() and digest(path) == info["sha256"]:
-        print(f"  ok        {name}")
-        continue
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_name(path.name + ".part")
-    print(f"  download  {name} ({info['bytes'] / 1e6:.1f} MB)")
-    with urllib.request.urlopen(info["url"], timeout=60) as response, partial.open("wb") as out:
-        while chunk := response.read(1 << 20):
-            out.write(chunk)
-    if digest(partial) != info["sha256"]:
-        partial.unlink()
-        sys.exit(f"Checksum mismatch for {name}; nothing was kept. Try again.")
-    partial.replace(path)
-print("All model files verified against upstream.json.")
-PY
+/usr/bin/python3 fetch_models.py
 
 echo
 echo "Setup complete. Start Dogspeak with ./app.sh"
