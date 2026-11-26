@@ -354,6 +354,17 @@ class QtWindowTests(unittest.TestCase):
         self.controller.cancel_recording()
         self.assertTrue(w.actions_by_name['clear'].isEnabled())
 
+    def test_open_and_settings_keep_a_maximized_window_maximized(self):
+        w = self.window
+        w.showMaximized()
+        for dialog in (w.show_drafts(), w.show_settings()):
+            self.assertTrue(w.windowState() & Qt.WindowMaximized, 'Frank saw Open un-maximize it')
+            dialog.reject()
+        w.showMinimized()
+        w.show_window()
+        self.assertFalse(w.windowState() & Qt.WindowMinimized)
+        self.assertTrue(w.windowState() & Qt.WindowMaximized, 'restored to maximized, as it was')
+
     def test_keys_in_dialogs_reach_the_filter_without_error(self):
         # Dialogs once kept the main window in self.window, hiding QWidget.window().
         for dialog in (self.window.show_settings(), self.window.show_drafts()):
