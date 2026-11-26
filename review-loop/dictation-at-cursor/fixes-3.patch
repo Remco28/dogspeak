@@ -1,0 +1,101 @@
+diff -ruN -x __pycache__ /home/frank/.cache/dogspeak-review/r4/after/dogspeak_app/gui.py /home/frank/.cache/dogspeak-review/r5/after/dogspeak_app/gui.py
+--- /home/frank/.cache/dogspeak-review/r4/after/dogspeak_app/gui.py	2026-10-30 12:26:35.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r5/after/dogspeak_app/gui.py	2026-10-30 12:29:27.000000000 -0400
+@@ -1,4 +1,5 @@
+ """Native, local Dogspeak scratchpad. Run with the system Python."""
++from dataclasses import replace
+ from pathlib import Path
+ import os
+ import stat
+@@ -15,6 +16,8 @@
+ gi.require_version('GtkSource', '5')
+ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource  # noqa: E402
+ 
++from .storage import transcript_insertion  # noqa: E402
++
+ ROOT = Path(__file__).resolve().parent.parent
+ APP_ID = 'io.github.Remco28.Dogspeak'
+ MAX_IMPORT_BYTES = 256 * 1024 * 1024
+@@ -604,13 +607,12 @@
+             return True
+         errors = []
+         save_error = None
+-        unsaved = []
+         if not discard:  # a transcript waiting for a pause in typing must not be lost
+             self.hold_result = lambda event: False
+             for event in list(self.held.values()):
+                 self._event(event)
+                 if event['id'] in self.pending:
+-                    unsaved.append(event.get('text', ''))
++                    self._keep_as_edit(event)
+         if discard:
+             self.dirty = False
+         else:
+@@ -618,8 +620,6 @@
+                 self.flush()
+             except Exception as exc:
+                 save_error = f'Could not save draft: {exc}'
+-            if unsaved and not save_error:
+-                save_error = 'Could not save this transcript: “' + ' '.join(unsaved) + '”'
+         # A refused close releases owned processes, not the unsaved editor/store.
+         self.stopping = True
+         self.ready = False
+@@ -657,6 +657,14 @@
+             self._closed(errors)
+         return self.closed
+ 
++    def _keep_as_edit(self, event):
++        """A transcript that wouldn't save becomes unsaved text, which close() protects."""
++        text = event.get('text', '').strip()
++        if text:
++            self.content += transcript_insertion(self.content, len(self.content), text)
++            self.dirty = True
++            self.on_draft(replace(self.draft, title=self.title, content=self.content), append=True)
++
+     def _closed(self, errors):
+         self._cleanup_done = True
+         self.shutdown_error = '; '.join(errors)
+diff -ruN -x __pycache__ /home/frank/.cache/dogspeak-review/r4/after/tests/test_gui.py /home/frank/.cache/dogspeak-review/r5/after/tests/test_gui.py
+--- /home/frank/.cache/dogspeak-review/r4/after/tests/test_gui.py	2026-10-30 12:27:06.000000000 -0400
++++ /home/frank/.cache/dogspeak-review/r5/after/tests/test_gui.py	2026-10-30 12:29:27.000000000 -0400
+@@ -917,16 +917,37 @@
+         self.controller.close()
+         self.assertEqual(database.read_text(), 'words\n\nSpoken')
+ 
+-    def test_quit_refuses_when_a_waiting_transcript_cannot_be_saved(self):
++    def test_waiting_transcript_that_will_not_save_becomes_an_edit_on_quit(self):
+         self.window.typing_pause = 60
++        origin = self.controller.draft.id
++        kept = self.root / 'kept.txt'
+         self.set_text('words')
+         self.engine.emit('result', id=self.start_dictation(), text='Spoken')
+         def fail(*args):
+             raise OSError('disk full')
+         self.store.append_transcript = fail
++        save = self.store.close
++        self.store.close = lambda: (kept.write_text(self.store.get_draft(origin).content), save())
++        self.assertTrue(self.controller.close())
++        self.assertEqual(kept.read_text(), 'words\n\nSpoken')
++
++    def test_waiting_transcript_survives_refused_quit_and_retry(self):
++        self.window.typing_pause = 60
++        origin = self.controller.draft.id
++        kept = self.root / 'kept.txt'
++        self.set_text('words')
++        self.engine.emit('result', id=self.start_dictation(), text='Spoken')
++        def fail(*args):
++            raise OSError('disk full')
++        append, save_draft = self.store.append_transcript, self.store.save_draft
++        self.store.append_transcript = self.store.save_draft = fail
+         self.assertFalse(self.controller.close())
+-        self.assertIn('Spoken', self.controller.message)
+-        self.assertFalse(self.controller.closed)
++        self.assertEqual(self.text(), 'words\n\nSpoken')  # Copy text includes it
++        self.store.append_transcript, self.store.save_draft = append, save_draft
++        save = self.store.close
++        self.store.close = lambda: (kept.write_text(self.store.get_draft(origin).content), save())
++        self.assertTrue(self.controller.close())
++        self.assertEqual(kept.read_text(), 'words\n\nSpoken')
+ 
+     def test_hidden_append_leaves_a_selection_alone(self):
+         buf = self.window.buffer

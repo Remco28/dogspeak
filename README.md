@@ -72,6 +72,7 @@
 
 - Lines are numbered; a long paragraph that wraps counts as one line. **Alt+Up** and **Alt+Down** move the current line or selected lines, also in the ☰ and right-click menus. A paragraph swaps with the next one and the blank line between them stays put; a line within a paragraph moves past its neighbour.
 - **Ctrl+N** new draft, **Ctrl+O** open a draft (the trash button deletes one, after asking), **Ctrl+Shift+C** copy the whole draft. Everything autosaves.
+- **Copy & Clear** (**Ctrl+Shift+X**) copies the whole draft, checks the clipboard, then clears the text. **Undo** in the message or **Ctrl+Z** restores it. **Clear** in the ☰ menu empties the draft without copying. Both keep the title and are unavailable while recording, transcribing or cleaning up.
 - Closing the window only hides it; the model stays loaded so the next recording is instant. Bring it back from the microphone icon in the top bar or the app launcher. **Ctrl+Q** (or *Quit* in either menu) exits and frees the memory.
 
 ### Clean up

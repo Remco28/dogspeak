@@ -32,6 +32,11 @@ Personal recordings and transcripts are never part of the public repository.
 - Numbered lines; the current line or selection can be moved up and down.
 - Separate inference process, keeping the model resident while the app runs.
 - Copy all for transfer to a coding agent; nothing auto-pastes or auto-sends.
+- Copy & Clear is a core toolbar action (Ctrl+Shift+X): verify the clipboard
+  before clearing the text as one undo step, with an Undo message. Keep Copy
+  All separate and Clear in the menu. Keep the title, transcripts and versions.
+  Disable clearing during recording, transcription or Clean up. An edit or
+  draft switch while verifying the clipboard leaves the text intact.
 - Import existing audio for retrying recordings and testing the complete app.
 - Preserve source ASR text locally. Delete capture audio after a successful
   transcript or a cancel. Native editor undo is enough; do not keep content
