@@ -210,6 +210,22 @@ class ShortcutTests(unittest.TestCase):
         self.assertEqual(hotkeys.label("Ctrl+F5"), "Ctrl+F5")
 
 
+class ForgetKeysTests(unittest.TestCase):
+    def test_removes_only_dogspeak_entries(self):
+        from dogspeak_app import forget_keys
+        stored = ["Dogspeak", "https://api.anthropic.com@Dogspeak", "git:https://github.com",
+                  "MicrosoftAccount:user=frank", "NotDogspeak", "Dogspeak@other"]
+        deleted = []
+        removed = forget_keys.forget(lambda: list(stored),
+                                     lambda target: deleted.append(target) or True)
+        self.assertEqual(removed, ["Dogspeak", "https://api.anthropic.com@Dogspeak"])
+        self.assertEqual(deleted, removed)
+
+    def test_a_refused_delete_is_not_reported_as_removed(self):
+        from dogspeak_app import forget_keys
+        self.assertEqual(forget_keys.forget(lambda: ["Dogspeak"], lambda target: False), [])
+
+
 class PathTests(unittest.TestCase):
     def test_override_and_venv_layout(self):
         import os
@@ -226,6 +242,15 @@ class PathTests(unittest.TestCase):
                 os.environ["DOGSPEAK_DATA_DIR"] = old
         python = paths.venv_python(Path("root"))
         if paths.WINDOWS:
+            with tempfile.TemporaryDirectory() as installed:
+                # The installer's layout: its own Python next to dogspeak_app.
+                bundled = Path(installed) / "python"
+                bundled.mkdir()
+                (bundled / "python.exe").touch()
+                (bundled / "pythonw.exe").touch()
+                self.assertEqual(paths.venv_python(Path(installed)), bundled / "python.exe")
+                self.assertEqual(paths.venv_python(Path(installed), windowed=True),
+                                 bundled / "pythonw.exe")
             self.assertEqual(python, Path("root/.venv/Scripts/python.exe"))
             self.assertEqual(paths.venv_python(Path("root"), windowed=True).name, "pythonw.exe")
         else:

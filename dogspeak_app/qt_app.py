@@ -34,6 +34,7 @@ from .qt_overlay import Pill
 from .ui_values import FEEDBACK_SECONDS
 
 APP_ID = 'io.github.Remco28.Dogspeak'
+APP_MUTEX = 'io.github.Remco28.Dogspeak.Running'
 log = logging.getLogger('dogspeak')
 IN_WINDOW_SHORTCUT = 'Ctrl+Shift+R'
 AUDIO_FILTER = 'Audio files (*.wav *.flac *.ogg *.mp3);;All files (*)'
@@ -1043,6 +1044,9 @@ def main(argv=None):
         import ctypes
         # Taskbar grouping and icon belong to Dogspeak, not to pythonw.exe.
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+        # The installer checks this name to ask you to quit Dogspeak before it updates
+        # or removes it. Held until the process ends.
+        ctypes.windll.kernel32.CreateMutexW(None, False, APP_MUTEX)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName('Dogspeak')
     app.setApplicationDisplayName('Dogspeak')

@@ -11,9 +11,17 @@ WINDOWS = sys.platform == "win32"
 
 
 def venv_python(root=ROOT, windowed=False):
-    """The project environment's Python. windowed picks pythonw.exe on Windows."""
+    """The Python that has Dogspeak's dependencies. windowed picks pythonw.exe on Windows.
+
+    A checkout has it in .venv. The Windows installer instead ships its own
+    Python, with the dependencies inside, in python\ next to dogspeak_app.
+    """
     if WINDOWS:
-        return Path(root) / ".venv" / "Scripts" / ("pythonw.exe" if windowed else "python.exe")
+        name = "pythonw.exe" if windowed else "python.exe"
+        bundled = Path(root) / "python" / name
+        if bundled.exists():
+            return bundled
+        return Path(root) / ".venv" / "Scripts" / name
     return Path(root) / ".venv" / "bin" / "python"
 
 
