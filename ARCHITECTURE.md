@@ -169,7 +169,10 @@ modules are chosen once in `qt_app.platform_parts`: `audio_portaudio.Recorder`
 audio is reported as the privacy switch), `credentials_keyring.Keyring`
 (Credential Manager). `paths.py` decides data (`%LOCALAPPDATA%\Dogspeak`),
 logs and the venv Python. The engine writes to the worker from a thread on
-Windows (no PIPE_BUF); child processes get `CREATE_NO_WINDOW`. Design values:
+Windows (no PIPE_BUF); child processes get `CREATE_NO_WINDOW`. Copy & Clear
+follows the GTK rules; Qt's clipboard is synchronous, so the read-back check
+needs no timeout, and its Undo sits in a notice bar above the status line.
+Design values:
 `qt_design.py`; decisions: docs/DESIGN.md.
 
 ### launch

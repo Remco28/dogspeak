@@ -21,7 +21,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QTextCursor, QTextDocument
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QApplication, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextDocumentLayout, QProgressBar,
     QPushButton, QSystemTrayIcon, QToolBar, QToolButton, QVBoxLayout, QWidget)
 
@@ -31,6 +31,7 @@ from .controller import Controller, background
 from .qt_cleanup import CleanupView, SettingsDialog
 from .qt_editor import DraftEditor, to_qt
 from .qt_overlay import Pill
+from .ui_values import FEEDBACK_SECONDS
 
 APP_ID = 'io.github.Remco28.Dogspeak'
 log = logging.getLogger('dogspeak')
@@ -129,6 +130,7 @@ class ScratchpadWindow(QMainWindow):
         self.displayed_draft = None
         self.drafts_dialog = self.settings_dialog = None
         self._tray_hint_shown = False
+        self.notice_timer = QTimer(self, singleShot=True, interval=FEEDBACK_SECONDS * 1000)
         self.save_timer = QTimer(self, singleShot=True, interval=500)
         self.save_timer.timeout.connect(self._autosave)
 
@@ -147,6 +149,7 @@ class ScratchpadWindow(QMainWindow):
         body.addWidget(self.editor, 1)
         body.addWidget(self.cleanup_view.panel)
         column.addLayout(body, 1)
+        column.addWidget(self._build_notice())
         column.addWidget(self._build_status())
         self.setCentralWidget(central)
 
@@ -194,6 +197,8 @@ class ScratchpadWindow(QMainWindow):
             ('new-draft', 'New draft', lambda: self.controller.new_draft(), 'Ctrl+N'),
             ('open-draft', 'Open a draft…', self.show_drafts, 'Ctrl+O'),
             ('copy-all', 'Copy all', self.copy_all, 'Ctrl+Shift+C'),
+            ('copy-clear', 'Copy && Clear', self.copy_and_clear, 'Ctrl+Shift+X'),
+            ('clear', 'Clear', self.clear_text, None),
             ('toggle-recording', 'Record', self.toggle_recording, IN_WINDOW_SHORTCUT),
             ('clean-up', 'Clean up', lambda: self.cleanup.start(), 'Ctrl+Shift+L'),
             ('settings', 'Settings…', self.show_settings, 'Ctrl+,'),
@@ -241,6 +246,10 @@ class ScratchpadWindow(QMainWindow):
         bar.addWidget(self.title_entry)
         bar.addWidget(spacer_right)
         bar.addWidget(self._tool('Copy all', 'Copy the whole draft (Ctrl+Shift+C)', 'copy-all'))
+        self.copy_clear_button = self._tool('Copy && Clear', 'Copy all text and clear this draft '
+                                            '(Ctrl+Shift+X)', 'copy-clear')
+        self.copy_clear_button.setAccessibleName('Copy and clear')
+        bar.addWidget(self.copy_clear_button)
         bar.addWidget(self.cleanup_view.panel_button)
         self.record_button = QPushButton('●  Record')
         self.record_button.setAccessibleName('Record')
@@ -248,6 +257,9 @@ class ScratchpadWindow(QMainWindow):
         self.record_button.clicked.connect(lambda: self.perform(self.toggle_recording))
         bar.addWidget(self.record_button)
         menu = QMenu(self)
+        for name in ('copy-all', 'copy-clear', 'clear'):
+            menu.addAction(self.actions_by_name[name])
+        menu.addSeparator()
         for name in ('move-line-up', 'move-line-down'):
             menu.addAction(self.actions_by_name[name])
         menu.addSeparator()
@@ -273,6 +285,43 @@ class ScratchpadWindow(QMainWindow):
         menu.addAction(self.actions_by_name['move-line-up'])
         menu.addAction(self.actions_by_name['move-line-down'])
         menu.exec(self.editor.mapToGlobal(point))
+
+    def _build_notice(self):
+        """Brief feedback such as "Copied and cleared", with its button (Qt has no toasts)."""
+        self.notice = QFrame()
+        self.notice.setObjectName('notice')
+        row = QHBoxLayout(self.notice)
+        row.setContentsMargins(d.SPACE_L, d.SPACE_XS, d.SPACE_L, d.SPACE_XS)
+        self.notice_text = QLabel()
+        self.notice_text.setTextFormat(Qt.PlainText)
+        row.addWidget(self.notice_text, 1)
+        self.notice_button = QPushButton('Undo')
+        self.notice_button.clicked.connect(self._notice_clicked)
+        row.addWidget(self.notice_button)
+        self.notice.hide()
+        self._notice_action = None
+        self.notice_timer.timeout.connect(self.dismiss_notice)
+        return self.notice
+
+    def show_notice(self, text, button=None, action=None):
+        self.notice_text.setText(text)
+        self.notice_button.setVisible(button is not None)
+        if button:
+            self.notice_button.setText(button)
+        self._notice_action = action
+        self.notice.show()
+        self.notice_timer.start()
+
+    def dismiss_notice(self):
+        self.notice_timer.stop()
+        self._notice_action = None
+        self.notice.hide()
+
+    def _notice_clicked(self):
+        action = self._notice_action
+        self.dismiss_notice()
+        if action is not None:
+            self.perform(action)
 
     def _build_status(self):
         status = QWidget()
@@ -400,10 +449,12 @@ class ScratchpadWindow(QMainWindow):
     def _changed(self, title=False):
         if self.rendering or self.closing:
             return
+        self.dismiss_notice()  # Undo only applies to the text it cleared
         if not title:
             self.last_edit = self.controller.clock()
         self.controller.edit(self.title_entry.text(), self.editor.text())
         self.save_timer.start()
+        self._update_clear_actions()
 
     def _autosave(self):
         self.perform(self.controller.flush)
@@ -411,6 +462,8 @@ class ScratchpadWindow(QMainWindow):
 
     def render_draft(self, draft, append=False, at=None):
         switching = self.displayed_draft != draft.id
+        if switching:
+            self.dismiss_notice()
         self.displayed_draft = draft.id
         self.rendering = True
         try:
@@ -456,12 +509,14 @@ class ScratchpadWindow(QMainWindow):
         self.editor.ensureCursorVisible()
         if switching:
             self.cleanup_view.refresh()
+        self._update_clear_actions()
 
     def replace_text(self, draft_id, text):
         """Swap a draft's whole text as one undoable step (Ctrl+Z brings it back)."""
         document = self.documents.get(draft_id)
         if document is None:
             return
+        self.dismiss_notice()
         self.rendering = True
         try:
             cursor = QTextCursor(document)
@@ -515,6 +570,7 @@ class ScratchpadWindow(QMainWindow):
         self.actions_by_name['toggle-recording'].setText('Stop' if recording else 'Record')
         self.microphone.setEnabled(not recording and not c.recording_job)
         self.cleanup_view.clean_button.setEnabled(cleanup.can_start())
+        self._update_clear_actions()
         if self.tray is not None:
             self.tray_record.setText(f'{"Stop" if recording else "Record"} ({c.shortcut_label})')
             self.tray.setToolTip(f'Dogspeak · {message}'[:120])
@@ -558,6 +614,57 @@ class ScratchpadWindow(QMainWindow):
 
     def copy_all(self):
         QGuiApplication.clipboard().setText(self.editor.text())
+
+    def _read_clipboard(self):
+        return QGuiApplication.clipboard().text()
+
+    def _can_clear(self):
+        c = self.controller
+        return not (self.closing or c.closed or c.recording_job or c.pending
+                    or self.cleanup.busy) and bool(self.editor.text())
+
+    def _update_clear_actions(self):
+        enabled = self._can_clear()
+        for name in ('copy-clear', 'clear'):
+            self.actions_by_name[name].setEnabled(enabled)
+        self.copy_clear_button.setEnabled(enabled)
+
+    def clear_text(self, copied=False):
+        """Empty the draft's text as one undo step; the title, transcripts and versions stay."""
+        if not self._can_clear():
+            return False
+        document = self.editor.document()
+        cursor = QTextCursor(document)
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.Document)
+        cursor.removeSelectedText()
+        cursor.endEditBlock()
+        self.editor.setFocus()
+        self.cleanup_view.refresh()
+
+        def undo():
+            if self.editor.document() is document and document.isUndoAvailable():
+                document.undo()
+                self.editor.setFocus()
+        self.show_notice('Copied and cleared' if copied else 'Cleared', 'Undo', undo)
+        self._update_clear_actions()
+        return True
+
+    def copy_and_clear(self):
+        """Copy, read the clipboard back, and clear only if it really holds the text."""
+        if not self._can_clear():
+            return False
+        text = self.editor.text()
+        try:
+            self.copy_all()
+            copied = self._read_clipboard()
+        except Exception:
+            copied = None
+        # Windows stores line breaks as CRLF on the clipboard.
+        if copied is None or copied.replace('\r\n', '\n') != text:
+            self.show_notice('Clipboard could not be verified. Text kept.')
+            return False
+        return self.clear_text(copied=True)
 
     def import_audio_dialog(self):
         path, _filter = QFileDialog.getOpenFileName(self, 'Import audio file', str(Path.home()),

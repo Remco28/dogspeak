@@ -295,6 +295,65 @@ class QtWindowTests(unittest.TestCase):
         self.assertIn('API key', self.window.cleanup_view.banner_text.text())
         self.assertEqual(self.window.cleanup_view.banner_button.text(), 'Open Settings')
 
+    def test_copy_and_clear_copies_then_clears_as_one_undo_step(self):
+        w = self.window
+        w.title_entry.setText('Login bug')
+        w._changed(title=True)
+        w.editor.setPlainText('line one\nline two')
+        w._changed()
+        self.assertTrue(w.actions_by_name['copy-clear'].isEnabled())
+        w.actions_by_name['copy-clear'].trigger()
+        self.assertEqual(QGuiApplication.clipboard().text(), 'line one\nline two')
+        self.assertEqual(w.editor.text(), '')
+        self.assertEqual(w.title_entry.text(), 'Login bug')
+        self.assertFalse(w.notice.isHidden())
+        self.assertEqual(w.notice_text.text(), 'Copied and cleared')
+        self.assertFalse(w.actions_by_name['copy-clear'].isEnabled(), 'nothing left to clear')
+        self.controller.flush()
+        self.assertEqual(self.store.get_draft(self.controller.draft.id).content, '')
+        self.assertEqual(self.store.get_draft(self.controller.draft.id).title, 'Login bug')
+        w.notice_button.click()
+        self.assertEqual(w.editor.text(), 'line one\nline two')
+        self.assertTrue(w.notice.isHidden())
+        w.actions_by_name['copy-clear'].trigger()
+        w.editor.undo()  # Ctrl+Z also brings it back
+        self.assertEqual(w.editor.text(), 'line one\nline two')
+
+    def test_clear_leaves_the_clipboard_and_typing_removes_the_undo(self):
+        w = self.window
+        QGuiApplication.clipboard().setText('something else')
+        w.editor.setPlainText('draft text')
+        w._changed()
+        w.actions_by_name['clear'].trigger()
+        self.assertEqual(w.editor.text(), '')
+        self.assertEqual(w.notice_text.text(), 'Cleared')
+        self.assertEqual(QGuiApplication.clipboard().text(), 'something else')
+        w.editor.insertPlainText('new')
+        self.assertTrue(w.notice.isHidden(), 'Undo only applies to the text it cleared')
+
+    def test_copy_and_clear_keeps_the_text_if_the_clipboard_disagrees(self):
+        w = self.window
+        w.editor.setPlainText('keep me')
+        w._changed()
+        w._read_clipboard = lambda: 'not what was copied'
+        self.assertFalse(w.copy_and_clear())
+        self.assertEqual(w.editor.text(), 'keep me')
+        self.assertEqual(w.notice_text.text(), 'Clipboard could not be verified. Text kept.')
+        self.assertTrue(w.notice_button.isHidden())
+
+    def test_clearing_is_unavailable_while_recording_or_cleaning_up(self):
+        w = self.window
+        w.editor.setPlainText('busy draft')
+        w._changed()
+        self.ready()
+        w.toggle_recording()
+        self.assertFalse(w.actions_by_name['copy-clear'].isEnabled())
+        self.assertFalse(w.copy_clear_button.isEnabled())
+        self.assertFalse(w.clear_text())
+        self.assertEqual(w.editor.text(), 'busy draft')
+        self.controller.cancel_recording()
+        self.assertTrue(w.actions_by_name['clear'].isEnabled())
+
     def test_keys_in_dialogs_reach_the_filter_without_error(self):
         # Dialogs once kept the main window in self.window, hiding QWidget.window().
         for dialog in (self.window.show_settings(), self.window.show_drafts()):

@@ -64,6 +64,10 @@ def stylesheet():
         background: palette(alternate-base);
         border-bottom: 1px solid palette(mid);
     }}
+    QFrame#notice {{
+        background: palette(alternate-base);
+        border-top: 1px solid palette(mid);
+    }}
     QFrame#banner[error="true"] {{
         background: rgba(198, 40, 40, 0.12);
         border-bottom: 1px solid {DANGER};
