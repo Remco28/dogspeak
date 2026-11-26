@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f1e9">
+  <title>Fieldnotes — project test round</title>
+  <style>
+    :root { color-scheme: light; --ink:#242923; --muted:#666d64; --paper:#f4f1e9; --card:#fffdf8; --line:#d9d5ca; --green:#315c43; --green-pale:#e7efe8; --amber:#805a19; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { width:min(900px,100% - 32px); margin:36px auto 80px; }
+    header { border-bottom:2px solid var(--ink); padding:0 0 22px; margin-bottom:24px; }
+    .brand { color:var(--green); font-size:.8rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+    h1 { font-size:clamp(2rem,6vw,3.2rem); letter-spacing:-.04em; line-height:1.08; margin:.3rem 0 .5rem; }
+    h2 { font-size:1.3rem; margin:0 0 .5rem; }
+    h3 { font-size:1.05rem; margin:0; }
+    p { margin:.4rem 0 .8rem; }
+    .muted, .hint { color:var(--muted); }
+    .meta { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:.9rem; color:var(--muted); }
+    .notice { border-left:4px solid var(--amber); background:#fff6df; padding:12px 14px; margin:18px 0; }
+    section, fieldset { border:1px solid var(--line); border-radius:12px; background:var(--card); padding:18px; margin:16px 0; }
+    fieldset { min-width:0; }
+    legend { font-weight:750; padding:0 5px; }
+    .scenario { border-top:1px solid var(--line); padding:16px 0 5px; margin-top:12px; }
+    .scenario:first-child { border-top:0; margin-top:0; padding-top:5px; }
+    .scenario p { margin:.25rem 0 .65rem; }
+    .checks { display:flex; flex-wrap:wrap; gap:8px 18px; margin:.7rem 0; }
+    label.check { display:inline-flex; align-items:center; gap:8px; min-height:34px; }
+    input[type=checkbox], input[type=radio] { width:18px; height:18px; accent-color:var(--green); }
+    label.field { display:block; font-weight:700; margin:14px 0 5px; }
+    input[type=text], textarea, select { width:100%; border:1px solid #aaa99f; border-radius:8px; background:white; color:var(--ink); font:inherit; padding:10px 12px; }
+    textarea { min-height:96px; resize:vertical; }
+    button { border:1px solid var(--green); border-radius:8px; padding:10px 15px; background:var(--green); color:white; font:inherit; font-weight:750; cursor:pointer; }
+    button.secondary { background:var(--card); color:var(--green); }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:3px solid #d59d3e; outline-offset:2px; }
+    .actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:18px 0; }
+    #save-status { color:var(--muted); }
+    .terms { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; }
+    .term { border:1px solid var(--line); border-radius:8px; padding:10px; background:#faf8f2; }
+    .term strong { display:block; color:var(--green); }
+    .screenshots { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-top:12px; }
+    .shot { border:1px solid var(--line); border-radius:8px; padding:8px; overflow:hidden; }
+    .shot img { display:block; width:100%; max-height:220px; object-fit:contain; background:#eee; }
+    .shot input { margin-top:8px; }
+    .shot button { margin-top:8px; }
+    .small { font-size:.9rem; }
+    footer { text-align:center; color:var(--muted); font-size:.85rem; margin-top:30px; }
+    @media(max-width:600px) { main { margin-top:20px; } section,fieldset { padding:14px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">Fieldnotes · a human test round</div>
+    <h1 id="page-title">Project test round</h1>
+    <p id="intro" class="muted"></p>
+    <div class="meta"><span id="project-name"></span><span id="round-name"></span><span id="commit-name"></span></div>
+    <p id="test-link"></p>
+  </header>
+
+  <div class="notice"><strong>Your notes are only in this browser page until you export.</strong> Export a ZIP before closing the tab. Nothing is uploaded. You can export again later and replace the earlier ZIP.</div>
+
+  <form id="feedback-form">
+    <section>
+      <h2>Start here</h2>
+      <p>Try any checks that interest you. Skip anything you do not want to try. You do not need special terms: tell us what you expected and what happened, or simply describe what felt confusing or off.</p>
+      <label class="field" for="tester">Your name or initials (optional)</label>
+      <input id="tester" name="tester" type="text" autocomplete="name">
+      <label class="field" for="browser">Browser / device (optional)</label>
+      <input id="browser" name="browser" type="text" placeholder="For example: Chrome on laptop">
+    </section>
+
+    <section>
+      <h2>Things to try</h2>
+      <div id="scenarios"></div>
+    </section>
+
+    <section>
+      <h2>Your overall impression</h2>
+      <label class="field" for="overall">How did this round feel?</label>
+      <select id="overall" name="overall">
+        <option value="">Choose one, or leave blank</option>
+        <option>Clear and comfortable</option><option>Mostly good, a few rough spots</option><option>Confusing in places</option><option>Something got in my way</option><option>I am not sure yet</option>
+      </select>
+      <label class="field" for="biggest-win">What worked especially well?</label>
+      <textarea id="biggest-win" name="biggestWin" placeholder="What felt quick, clear, or satisfying?"></textarea>
+      <label class="field" for="biggest-friction">What should we improve first?</label>
+      <textarea id="biggest-friction" name="biggestFriction" placeholder="What was awkward, surprising, slow, or hard to understand?"></textarea>
+      <label class="field" for="other-notes">Anything else?</label>
+      <textarea id="other-notes" name="otherNotes"></textarea>
+    </section>
+
+    <section>
+      <h2>Optional words for describing what you notice</h2>
+      <p class="muted">These are just suggestions. Your own words are more useful than guessing at a technical term.</p>
+      <div class="terms" id="terms"></div>
+    </section>
+
+    <section>
+      <h2>Screenshots</h2>
+      <p>Copy an image (annotated screenshots are welcome), click this area, and press <kbd>Ctrl</kbd>+<kbd>V</kbd>. You can also choose image files. A preview appears below; screenshots are included in the ZIP.</p>
+      <label class="field" for="screenshot-files">Attach image files</label>
+      <input id="screenshot-files" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
+      <div id="paste-target" tabindex="0" role="region" aria-label="Screenshot paste area" style="border:2px dashed #aaa99f;border-radius:8px;padding:16px;text-align:center;margin-top:12px">Click here, then paste a screenshot</div>
+      <div id="screenshots" class="screenshots"></div>
+      <p class="hint small">Images remain on this page until you export. Export a ZIP while it is open to keep them.</p>
+    </section>
+
+    <div class="actions">
+      <button type="button" id="export">Export feedback ZIP</button>
+      <button type="reset" class="secondary">Clear this round</button>
+      <span id="save-status" role="status">Not exported yet</span>
+    </div>
+  </form>
+  <footer>Fieldnotes works in this page only. It does not send your feedback or screenshots to a server.</footer>
+</main>
+
+<script>
+// Customize this object for each project and testing round. Keep language human-facing.
+const CONFIG = {
+  "project": "Dogspeak",
+  "roundId": "2026-11-26-windows-first-try",
+  "title": "Dogspeak on Windows: a first try",
+  "testUrl": "",
+  "testedCommit": "5cae1ec (branch windows-port)",
+  "intro": "This is the first Windows version of Dogspeak. An agent already checked that it starts, records, transcribes and quits on your laptop; what it can't judge is how it feels to use. To get it: in C:\\windev\\dogspeak run  git pull  (you're on the windows-port branch), then start it with dogspeak.cmd (or .\\dogspeak.cmd in PowerShell). The first start takes about 20 seconds while the model loads. Try whichever checks below you like; a sentence or two each is plenty. Nothing here is uploaded: Export ZIP packs your answers in the browser, and you attach that ZIP in the T3 thread.",
+  "scenarios": [
+    {
+      "id": "dictate-in-window",
+      "title": "Dictate into a draft",
+      "why": "This is the main thing Dogspeak does, and the Windows microphone path is new.",
+      "try": "Click Record (or press Ctrl+Alt+R), say a paragraph the way you'd brief a coding agent, then press Enter. Notice: how long until the text appears, whether it lands where your cursor was, whether the words are right, and whether the ums are gone. Try once with the cursor in the middle of a sentence."
+    },
+    {
+      "id": "dictate-elsewhere",
+      "title": "Dictate from another app",
+      "why": "Ctrl+Alt+R and the pill are what replace Super+R and the GNOME pill.",
+      "try": "With Notepad, a browser or T3 Code in front, press Ctrl+Alt+R, talk, press Enter. A small dark pill should appear above the taskbar without taking focus; the text goes to the end of your draft and onto the clipboard, so Ctrl+V pastes it. Also try Esc to cancel. Notice: does the pill sit in a good spot, is it readable, did anything steal focus, did Ctrl+Alt+R clash with something you use?"
+    },
+    {
+      "id": "microphone",
+      "title": "Pick your microphone",
+      "why": "Windows lists devices differently from Linux.",
+      "try": "Use the menu at the bottom right to choose the HyperX SoloCast 2, then the laptop's built-in microphone, and dictate a sentence with each. Are the names recognisable? Is one clearly better?"
+    },
+    {
+      "id": "clean-up-claude",
+      "title": "Clean up with your Anthropic key",
+      "why": "You asked to use your own Anthropic key; the key now lives in Windows Credential Manager.",
+      "try": "Open Settings (Ctrl+, or the ☰ menu), choose Claude (Anthropic), paste your key, set a model (claude-opus-5-5, or claude-haiku-5-5 for less cost) and press Test. Then dictate something rambling, pick a purpose such as Prompt for an AI agent, and press Clean up. Try Ctrl+Z, Revert and the suggestions panel. Is the result what you'd want to paste?"
+    },
+    {
+      "id": "look-and-feel",
+      "title": "Look and feel",
+      "why": "The Windows window is new (Qt instead of GTK) and should feel at home on Windows 11.",
+      "try": "Look around the window, the Settings dialog and the Open dialog (Ctrl+O). Try Windows' dark mode if you use it. Anything cramped, clipped, oddly placed, hard to read, or that simply looks unfinished? Screenshots help."
+    },
+    {
+      "id": "tray-and-quit",
+      "title": "Closing, the tray and quitting",
+      "why": "Closing the window keeps the model loaded so the next recording is instant.",
+      "try": "Close the window with the X: Dogspeak keeps running with an icon in the tray (it may be in the hidden-icons arrow; drag it out to keep it visible). Press Ctrl+Alt+R with the window closed. Bring the window back from the tray, then quit with Ctrl+Q or the tray menu. Was it clear that Dogspeak was still running?"
+    },
+    {
+      "id": "start-menu",
+      "title": "Optional: Start menu entry",
+      "why": "An optional extra that installs and uninstalls cleanly.",
+      "try": "Run  .venv\\Scripts\\python.exe windows_install.py  and start Dogspeak from the Start menu. Remove it again with  --uninstall  if you don't want it. Did the icon look right?"
+    }
+  ],
+  "vocabulary": [
+    {
+      "term": "Pill",
+      "meaning": "The small dark bar above the taskbar that shows Recording, Transcribing, Saved or Cancelled."
+    },
+    {
+      "term": "Draft",
+      "meaning": "One text in Dogspeak. Ctrl+N makes a new one, Ctrl+O opens another."
+    },
+    {
+      "term": "Clean up",
+      "meaning": "The button that sends the draft to the model you chose in Settings and rewrites it. Dictation itself never leaves the laptop."
+    },
+    {
+      "term": "Purpose",
+      "meaning": "What the text is for (an AI prompt, an email, notes). Clean up formats it to suit."
+    },
+    {
+      "term": "Tray",
+      "meaning": "The icons at the right end of the taskbar, including the hidden-icons arrow."
+    }
+  ]
+};
+
+const form = document.querySelector("#feedback-form");
+const scenarioRoot = document.querySelector("#scenarios");
+const termRoot = document.querySelector("#terms");
+const shotsRoot = document.querySelector("#screenshots");
+const status = document.querySelector("#save-status");
+const imageFiles = [];
+let dirty = false;
+let nextScreenshotNumber = 1;
+
+document.title = `Fieldnotes — ${CONFIG.project} — ${CONFIG.roundId}`;
+document.querySelector("#page-title").textContent = CONFIG.title;
+document.querySelector("#intro").textContent = CONFIG.intro;
+document.querySelector("#project-name").textContent = `Project: ${CONFIG.project}`;
+document.querySelector("#round-name").textContent = `Round: ${CONFIG.roundId}`;
+document.querySelector("#commit-name").textContent = CONFIG.testedCommit ? `Version: ${CONFIG.testedCommit}` : "Version: add commit before testing if known";
+if (CONFIG.testUrl) {
+  const link = node("a", { href: CONFIG.testUrl, target: "_blank", rel: "noreferrer" }, `Open ${CONFIG.project} in another tab`);
+  document.querySelector("#test-link").append(link);
+}
+
+function node(tag, attrs = {}, text = "") {
+  const element = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
+  if (text) element.textContent = text;
+  return element;
+}
+
+for (const [index, scenario] of CONFIG.scenarios.entries()) {
+  const box = node("div", { class: "scenario" });
+  box.append(node("h3", {}, `${index + 1}. ${scenario.title}`));
+  box.append(node("p", { class: "muted" }, scenario.why));
+  box.append(node("p", {}, scenario.try));
+  const checks = node("div", { class: "checks" });
+  for (const [name, label] of [["tried", "I tried this"], ["issue", "I noticed something to report"]]) {
+    const wrap = node("label", { class: "check" });
+    const input = node("input", { type: "checkbox", name: `${scenario.id}-${name}` });
+    input.dataset.scenario = scenario.id;
+    input.dataset.kind = name;
+    wrap.append(input, document.createTextNode(label));
+    checks.append(wrap);
+  }
+  box.append(checks);
+  const response = node("label", { class: "field" }, "What happened? (optional)");
+  const area = node("textarea", { name: `${scenario.id}-notes`, placeholder: "What did you try? What did you expect? What happened, or how did it feel?" });
+  area.dataset.scenario = scenario.id;
+  response.htmlFor = area.id = `${scenario.id}-notes`;
+  box.append(response, area);
+  scenarioRoot.append(box);
+}
+
+for (const item of CONFIG.vocabulary) {
+  const term = node("div", { class: "term" });
+  term.append(node("strong", {}, item.term), node("span", {}, item.meaning));
+  termRoot.append(term);
+}
+
+function markChanged() {
+  dirty = true;
+  status.textContent = "Changes not exported yet";
+}
+form.addEventListener("input", markChanged);
+form.addEventListener("change", markChanged);
+form.addEventListener("reset", event => {
+  if (dirty && !window.confirm("Clear this round's answers and screenshots? Export a ZIP first if you want to keep them.")) {
+    event.preventDefault();
+    return;
+  }
+  for (const image of imageFiles.splice(0)) URL.revokeObjectURL(image.url);
+  shotsRoot.replaceChildren();
+  setTimeout(() => { markChanged(); }, 0);
+});
+window.addEventListener("beforeunload", event => {
+  if (!dirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+function addImage(file) {
+  if (!file || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+    status.textContent = "Use a PNG, JPEG, GIF, or WebP image.";
+    return;
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    status.textContent = "That image is over the 20 MB per-image limit.";
+    return;
+  }
+  const total = imageFiles.reduce((sum, item) => sum + item.file.size, 0) + file.size;
+  if (total > 100 * 1024 * 1024) {
+    status.textContent = "This round has reached the 100 MB total image limit.";
+    return;
+  }
+  const ext = ({ "image/png":"png", "image/jpeg":"jpg", "image/gif":"gif", "image/webp":"webp" })[file.type];
+  const baseName = file.name?.replace(/\.[^.]+$/, "") || "screenshot";
+  const safeBase = baseName.normalize("NFKD").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "screenshot";
+  const name = `${String(nextScreenshotNumber++).padStart(2,"0")}-${safeBase}.${ext}`;
+  const item = { file, name, url: URL.createObjectURL(file), note: "" };
+  imageFiles.push(item);
+  const card = node("div", { class: "shot" });
+  const img = node("img", { src: item.url, alt: `Preview of ${name}` });
+  const fileLabel = node("p", { class: "small" }, name);
+  const note = node("input", { type: "text", placeholder: "What does this show? (optional)", "aria-label": `Description for ${name}` });
+  note.addEventListener("input", () => { item.note = note.value; markChanged(); });
+  const remove = node("button", { type: "button", class: "secondary" }, "Remove image");
+  remove.addEventListener("click", () => {
+    const index = imageFiles.indexOf(item);
+    if (index >= 0) imageFiles.splice(index, 1);
+    URL.revokeObjectURL(item.url);
+    card.remove();
+    markChanged();
+  });
+  card.append(img, fileLabel, note, remove);
+  shotsRoot.append(card);
+  markChanged();
+}
+
+document.querySelector("#screenshot-files").addEventListener("change", event => {
+  for (const file of event.target.files ?? []) addImage(file);
+  event.target.value = "";
+});
+document.querySelector("#paste-target").addEventListener("paste", event => {
+  const files = [...(event.clipboardData?.items ?? [])]
+    .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+    .map(item => item.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  event.preventDefault();
+  files.forEach(addImage);
+});
+
+function formDataObject() {
+  const data = new FormData(form);
+  const answers = {};
+  for (const [key, value] of data.entries()) if (typeof value === "string") answers[key] = value;
+  return answers;
+}
+
+function makeFeedback(answers) {
+  const lines = [`# ${CONFIG.project} — ${CONFIG.title}`, "", `Round: ${CONFIG.roundId}`, `Tested version: ${CONFIG.testedCommit || "not recorded"}`, `Date: ${new Date().toLocaleString()}`, `Tester: ${answers.tester || "not provided"}`, `Browser/device: ${answers.browser || "not provided"}`, "", "## Checks tried", ""];
+  for (const scenario of CONFIG.scenarios) {
+    const tried = answers[`${scenario.id}-tried`] === "on" ? "tried" : "not marked tried";
+    const issue = answers[`${scenario.id}-issue`] === "on" ? "; something to report" : "";
+    lines.push(`### ${scenario.title} (${tried}${issue})`, scenario.try, "", answers[`${scenario.id}-notes`] || "No additional notes.", "");
+  }
+  lines.push("## Overall impression", "", `Overall: ${answers.overall || "not provided"}`, "", "### Worked well", answers.biggestWin || "No answer.", "", "### Improve first", answers.biggestFriction || "No answer.", "", "### Other notes", answers.otherNotes || "No answer.", "", "## Screenshots", "");
+  if (imageFiles.length) for (const image of imageFiles) lines.push(`- screenshots/${image.name}${image.note ? ` — ${image.note}` : ""}`);
+  else lines.push("No screenshots attached.");
+  lines.push("", "Vocabulary shown to the tester:", ...CONFIG.vocabulary.map(item => `- ${item.term}: ${item.meaning}`));
+  return lines.join("\n");
+}
+
+const encoder = new TextEncoder();
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function dosDateTime(date) {
+  const year = Math.max(1980, date.getFullYear());
+  return { time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2), date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate() };
+}
+function zipStore(files) {
+  const localParts = [], centralParts = [];
+  const stamp = dosDateTime(new Date());
+  let offset = 0;
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const data = file.bytes instanceof Uint8Array ? file.bytes : encoder.encode(file.bytes);
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + name.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0,0x04034b50,true); lv.setUint16(4,20,true); lv.setUint16(6,0x0800,true); lv.setUint16(8,0,true);
+    lv.setUint16(10,stamp.time,true); lv.setUint16(12,stamp.date,true); lv.setUint32(14,crc,true); lv.setUint32(18,data.length,true); lv.setUint32(22,data.length,true);
+    lv.setUint16(26,name.length,true); lv.setUint16(28,0,true); local.set(name,30);
+    localParts.push(local,data);
+    const central = new Uint8Array(46 + name.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0,0x02014b50,true); cv.setUint16(4,20,true); cv.setUint16(6,20,true); cv.setUint16(8,0x0800,true); cv.setUint16(10,0,true);
+    cv.setUint16(12,stamp.time,true); cv.setUint16(14,stamp.date,true); cv.setUint32(16,crc,true); cv.setUint32(20,data.length,true); cv.setUint32(24,data.length,true);
+    cv.setUint16(28,name.length,true); cv.setUint16(30,0,true); cv.setUint16(32,0,true); cv.setUint16(34,0,true); cv.setUint16(36,0,true); cv.setUint32(38,0,true); cv.setUint32(42,offset,true); central.set(name,46);
+    centralParts.push(central);
+    offset += local.length + data.length;
+  }
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0,0x06054b50,true); ev.setUint16(4,0,true); ev.setUint16(6,0,true); ev.setUint16(8,files.length,true); ev.setUint16(10,files.length,true);
+  ev.setUint32(12,centralSize,true); ev.setUint32(16,offset,true); ev.setUint16(20,0,true);
+  return new Blob([...localParts,...centralParts,end],{type:"application/zip"});
+}
+
+document.querySelector("#export").addEventListener("click", async () => {
+  try {
+    const answers = formDataObject();
+    const screenshotManifest = imageFiles.map(image => ({ file: `screenshots/${image.name}`, type: image.file.type, size: image.file.size, note: image.note }));
+    const feedback = { project: CONFIG.project, roundId: CONFIG.roundId, testUrl: CONFIG.testUrl || null, testedCommit: CONFIG.testedCommit || null, submittedAt: new Date().toISOString(), answers, scenarios: CONFIG.scenarios, screenshots: screenshotManifest };
+    const metadata = { format: "fieldnotes-feedback-v1", project: CONFIG.project, roundId: CONFIG.roundId, title: CONFIG.title, testUrl: CONFIG.testUrl || null, testedCommit: CONFIG.testedCommit || null, createdAt: new Date().toISOString(), exportedAt: new Date().toISOString(), page: "standalone-offline-html" };
+    const files = [
+      { name:"feedback.md", bytes:makeFeedback(answers) },
+      { name:"feedback.json", bytes:JSON.stringify(feedback,null,2) },
+      { name:"round.json", bytes:JSON.stringify(metadata,null,2) }
+    ];
+    for (const image of imageFiles) files.push({ name:`screenshots/${image.name}`, bytes:new Uint8Array(await image.file.arrayBuffer()) });
+    const blob = zipStore(files);
+    const url = URL.createObjectURL(blob);
+    const link = node("a", { href:url, download:`human-feedback-${CONFIG.roundId}.zip` });
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    dirty = false;
+    status.textContent = `ZIP exported with ${imageFiles.length} screenshot${imageFiles.length === 1 ? "" : "s"}. Put it in human_feedback/${CONFIG.roundId}/.`;
+  } catch (error) {
+    status.textContent = `Could not export ZIP: ${error instanceof Error ? error.message : String(error)}. Keep this page open and try again.`;
+  }
+});
+</script>
+</body>
+</html>
