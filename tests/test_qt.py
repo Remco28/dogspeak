@@ -326,6 +326,8 @@ class SingleInstanceTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_second_launch_hands_its_command_to_the_first(self):
+        import subprocess
+        import sys
         from dogspeak_app.qt_app import SingleInstance
         name = f'dogspeak-test-{uuid.uuid4().hex[:8]}'
         first = SingleInstance(name)
@@ -334,17 +336,20 @@ class SingleInstanceTests(unittest.TestCase):
         self.addCleanup(first.close)
         received = []
         first.on_command = received.append
-        sender = threading.Thread(target=lambda: SingleInstance(name).send(
-            {'action': 'import-audio', 'path': 'C:\\clip.wav'}))
-        sender.start()
-        for _ in range(200):
+        # A real second process, as when dogspeak.cmd runs while Dogspeak is open.
+        second = subprocess.Popen([sys.executable, '-c', (
+            'import sys; from PySide6.QtCore import QCoreApplication; '
+            'from dogspeak_app.qt_app import SingleInstance; app = QCoreApplication([]); '
+            f'sys.exit(0 if SingleInstance({name!r}).send('
+            '{"action": "import-audio", "path": "C:\\\\clip.wav"}, timeout=5000) else 3)')],
+            cwd=str(Path(__file__).resolve().parents[1]))
+        for _ in range(1000):
             self.app.processEvents()
-            if received:
+            if received and second.poll() is not None:
                 break
-            sender.join(timeout=0.01)
-        sender.join()
+            threading.Event().wait(0.01)
+        self.assertEqual(second.wait(timeout=10), 0)
         self.assertEqual(received, [{'action': 'import-audio', 'path': 'C:\\clip.wav'}])
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -777,6 +777,7 @@ class SingleInstance:
             import ctypes
             ctypes.windll.user32.AllowSetForegroundWindow(-1)
         socket.write((json.dumps(command) + '\n').encode('utf-8'))
+        socket.flush()
         socket.waitForBytesWritten(timeout)
         # Hanging up at once can drop the line on Windows; the first instance hangs up
         # after reading it.
