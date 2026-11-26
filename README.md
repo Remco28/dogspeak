@@ -2,10 +2,10 @@
 
 # Dogspeak
 
-**Talk freely, get a clear prompt.** Dogspeak is a dictation scratchpad for Linux (GNOME). Speak the way you think, rambling, repeating yourself, changing your mind, and Dogspeak turns it into text you can edit and paste into a coding agent, an email or anything else.
+**Talk freely, get a clear prompt.** Dogspeak is a dictation scratchpad for Linux (GNOME) and Windows. Speak the way you think, rambling, repeating yourself, changing your mind, and Dogspeak turns it into text you can edit and paste into a coding agent, an email or anything else.
 
 - **Local speech recognition.** Dictation runs on your own computer with the [Underdog Bark 3.0 Clean](https://huggingface.co/ConwayResearch/Underdog-Bark-3.0-Clean) model, which also drops "um"s and false starts. No audio leaves the machine.
-- **Record from anywhere.** Press **Super+R** in any app; a small pill at the bottom of the screen shows the recording, **Enter** stops it, **Esc** cancels. The text lands in your current draft and on the clipboard.
+- **Record from anywhere.** Press **Super+R** on Linux or **Ctrl+Alt+R** on Windows, in any app; a small pill at the bottom of the screen shows the recording, **Enter** stops it, **Esc** cancels. The text lands in your current draft and on the clipboard.
 - **Clean up (optional).** One button sends the draft to a language model you choose (Claude, OpenRouter, OpenAI, Gemini, a local Ollama model, …) and turns it into a coherent, well-structured prompt, with suggestions on what's still missing. Every clean-up can be undone.
 - **Drafts, not chats.** Several drafts, autosaved, with titles; nothing is sent or pasted anywhere unless you do it.
 
@@ -13,14 +13,14 @@
 
 ## Requirements
 
-- **Linux with GNOME.** Developed and tested on Ubuntu 26.04 (GNOME 50, Wayland); GNOME on X11 should work but hasn't been tested. On other desktops (KDE, Xfce, …) the editor, recording and Clean up work, but the Super+R shortcut, the on-screen pill and the top-bar menu do not, because those are built on GNOME Shell.
+- **Linux with GNOME**, or **Windows 10 or 11**. On Linux it is developed and tested on Ubuntu 26.04 (GNOME 50, Wayland); GNOME on X11 should work but hasn't been tested. On other Linux desktops (KDE, Xfce, …) the editor, recording and Clean up work, but the Super+R shortcut, the on-screen pill and the top-bar menu do not, because those are built on GNOME Shell.
 - **About 4 GB of free RAM** while Dogspeak is open (the speech model stays loaded) and about 2 GB of disk.
-- A microphone, and PipeWire (the default on current Ubuntu, Fedora and Debian).
+- A microphone. On Linux, PipeWire (the default on current Ubuntu, Fedora and Debian).
 - No GPU is needed; recognition runs on the CPU. A paragraph typically takes one to two seconds.
 
-**Windows and macOS are not supported.** See [Porting](#porting-to-other-platforms) below for what it would take.
+macOS is not supported.
 
-## Install
+## Install on Linux
 
 1. Install the system packages (Ubuntu or Debian; other distributions have equivalents):
 
@@ -56,11 +56,49 @@
 
    Then **log out and back in once**, so GNOME Shell loads the Dogspeak extension. Without `--shortcut`, only the launcher entry is added. The installer never replaces a shortcut another app already uses; it stops and tells you instead.
 
+## Install on Windows
+
+1. Install [Git for Windows](https://git-scm.com/download/win) and [uv](https://docs.astral.sh/uv/getting-started/installation/). uv fetches the right Python by itself.
+
+2. Clone and set up, in a terminal (cmd or PowerShell):
+
+   ```bat
+   git clone https://github.com/Remco28/dogspeak.git
+   cd dogspeak
+   setup.cmd
+   ```
+
+   `setup.cmd` builds the environment (`.venv`, about 1 GB) and downloads the model (about 180 MB), checking every file against `upstream.json`. It is safe to run again.
+
+3. Start it with `dogspeak.cmd`. The first start takes about half a minute while the model loads; you can type in the meantime.
+
+4. **Optional:** add Dogspeak to the Start menu:
+
+   ```bat
+   .venv\Scripts\python.exe windows_install.py
+   ```
+
+On Windows, **Ctrl+Alt+R** records from any app (change it in Settings; Windows keeps Win+R for itself). The pill appears above the taskbar, and **Enter** and **Esc** stop or cancel while it records. Closing the window keeps Dogspeak in the tray (it may be in the taskbar's hidden-icons area; drag it out to keep it in view). **Ctrl+Q** or *Quit* in the tray menu exits and frees the memory. API keys go in Windows Credential Manager.
+
+If recordings come back as "only silence", Windows is blocking the microphone: turn on *Settings → Privacy & security → Microphone → Let desktop apps access your microphone*.
+
+### What the Windows installer changes
+
+`setup.cmd` changes nothing outside the Dogspeak folder except uv's download cache. `windows_install.py` adds the items below and records them in a ledger; `windows_install.py --uninstall` removes exactly those, and only if the shortcut still points at this folder.
+
+| Change | Where | Undone by |
+|---|---|---|
+| Start menu shortcut | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Dogspeak.lnk` | `--uninstall` |
+| Its icon | `%LOCALAPPDATA%\Dogspeak\dogspeak.ico` | `--uninstall` |
+| The ledger | `%LOCALAPPDATA%\Dogspeak\install.json` | `--uninstall` |
+
+Running Dogspeak keeps your drafts in `%LOCALAPPDATA%\Dogspeak` and its log in `%LOCALAPPDATA%\Dogspeak\logs`, and API keys in Credential Manager under "Dogspeak". To remove Dogspeak completely: run `--uninstall`, delete the Dogspeak folder you cloned, delete `%LOCALAPPDATA%\Dogspeak` (your drafts), and remove the "Dogspeak" entries in Credential Manager. Nothing is added to the registry, to startup or to PATH.
+
 ## Using Dogspeak
 
 ### Dictation
 
-- **Record** (or **Super+R**, from any app) starts recording; press it again, or **Enter**, to stop. **Esc** cancels and throws the audio away.
+- **Record** (or **Super+R** on Linux, **Ctrl+Alt+R** on Windows, from any app) starts recording; press it again, or **Enter**, to stop. **Esc** cancels and throws the audio away.
 - The transcript goes where your cursor is, and the cursor moves to the end of it, so the next recording carries on from there. Click anywhere in the draft to dictate into that spot: between lines it becomes its own line or paragraph, in the middle of a line it joins the sentence. A draft you open or go back to starts with the cursor at the end (**Ctrl+End** gets back there).
 - You can keep typing while it's being transcribed. If you're mid-word when it finishes, the transcript waits until you pause for a second.
 - A recording started while another app has focus, or with the window closed, goes at the end of the draft. So does an imported audio file.
@@ -94,7 +132,7 @@ Press **Clean up** (**Ctrl+Shift+L**) and the draft is rewritten: repeated point
 | Ollama on this computer | no key needed | any model you've pulled |
 | Anything OpenAI-compatible | choose *Custom* and enter its address | |
 
-API keys are stored in GNOME's password keyring, never in Dogspeak's files. Only the Clean up button sends anything off your computer: the draft and its purpose, to the provider you chose.
+API keys are stored in GNOME's password keyring (Windows Credential Manager on Windows), never in Dogspeak's files. Only the Clean up button sends anything off your computer: the draft and its purpose, to the provider you chose.
 
 ## Privacy
 
@@ -112,16 +150,19 @@ API keys are stored in GNOME's password keyring, never in Dogspeak's files. Only
 - **Clean up fails:** the banner gives the reason (key rejected, out of credit, model not found, offline). **Test** in Settings checks the setup without spending anything.
 - **Logs:** the speech worker writes to `~/.local/state/dogspeak/worker.log`.
 
-## Porting to other platforms
+## How the two platforms differ
 
-The editor, drafts, version history, Clean up and the speech-recognition worker are plain Python and would carry over. Four pieces are Linux/GNOME-specific and would need a replacement per platform:
+The drafts, version history, Clean up, the speech worker and all of their rules are shared code (`dogspeak_app/controller.py`, `cleanup.py`, `storage.py`, `engine.py`). Each platform has its own window and its own small modules for the operating system:
 
-1. **Audio capture** uses PipeWire's `pw-record` (`dogspeak_app/audio.py`).
-2. **The pill, Enter/Esc while recording, the clipboard hand-off and the top-bar menu** are a GNOME Shell extension (`gnome-extension/`), because Wayland doesn't let an app window stay on top. On Windows and macOS an always-on-top window and a tray icon do the job.
-3. **The global shortcut** is a GNOME custom keybinding (`desktop_install.py`).
-4. **API keys** use the Secret Service keyring (`dogspeak_app/credentials.py`); Windows and macOS have their own credential stores.
+| | Linux (GNOME) | Windows |
+|---|---|---|
+| Window | GTK 4 / libadwaita, `gui.py`, system Python | Qt (PySide6), `qt_app.py`, the project environment |
+| Microphone | PipeWire's `pw-record`, `audio.py` | PortAudio (WASAPI), `audio_portaudio.py` |
+| Shortcut | GNOME custom keybinding, `desktop_install.py` | `RegisterHotKey`, `hotkeys.py` |
+| Pill, Enter/Esc, menu | GNOME Shell extension | an always-on-top window, held hotkeys, a tray icon |
+| API keys | Secret Service, `credentials.py` | Credential Manager, `credentials_keyring.py` |
 
-The window uses GTK 4 and libadwaita, which run on Windows and macOS but look out of place there; a serious port would probably switch toolkits. [ARCHITECTURE.md](ARCHITECTURE.md) describes the module boundaries.
+[ARCHITECTURE.md](ARCHITECTURE.md) describes the module boundaries.
 
 ## Development
 
@@ -129,7 +170,7 @@ The window uses GTK 4 and libadwaita, which run on Windows and macOS but look ou
 ./test.sh
 ```
 
-runs the core tests in the project environment and the GTK tests headless (needs `xvfb`: `sudo apt install xvfb`). Tests use temporary data and stand-ins for the microphone, the speech model and the language-model providers; they never record or spend credit.
+runs the core tests in the project environment and the GTK tests headless (needs `xvfb`: `sudo apt install xvfb`). The Qt window's tests run headless too when the environment has the dev group (`uv sync`). On Windows, run `.venv\Scripts\python.exe -m unittest discover -s tests -p "test_[!g]*.py"`. GitHub Actions runs the tests on Ubuntu and Windows for every push. Tests use temporary data and stand-ins for the microphone, the speech model and the language-model providers; they never record or spend credit.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together and why.
 - [PRODUCT.md](PRODUCT.md): what Dogspeak is meant to be, and the decisions behind it.

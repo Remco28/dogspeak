@@ -14,3 +14,7 @@ vendor/.cache/
 *.db
 *.db-*
 .test-data/
+
+# Agent Office links to this machine's skills checkout; the path differs per machine.
+.agents/skills
+.claude/skills

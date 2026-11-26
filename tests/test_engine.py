@@ -11,6 +11,8 @@ import threading
 import time
 import unittest
 
+import psutil
+
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_WORKER = f'''
 import os, runpy, sys, types
@@ -30,26 +32,43 @@ runpy.run_path({str(ROOT / 'dogspeak_app' / 'worker.py')!r}, run_name="__main__"
 '''
 
 
+def gone(pid, timeout=5):
+    """True once pid has exited. On Windows a venv python.exe is a launcher whose child
+    (the real worker) ends a moment after the launcher does."""
+    try:
+        psutil.Process(pid).wait(timeout=timeout)
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.TimeoutExpired:
+        return False
+    return True
+
+
 class EngineTests(unittest.TestCase):
     def make_root(self, script=FAKE_WORKER):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
-        (root / ".venv/bin").mkdir(parents=True)
-        (root / ".venv/bin/python").symlink_to(sys.executable)
+        if os.name == "posix":
+            (root / ".venv/bin").mkdir(parents=True)
+            (root / ".venv/bin/python").symlink_to(sys.executable)
         (root / "dogspeak_app").mkdir()
         (root / "dogspeak_app/__init__.py").touch()
         (root / "dogspeak_app/worker.py").write_text(script)
         return root
 
-    def make_client(self, root):
+    def make_client(self, root, python=None):
         engine = importlib.import_module("dogspeak_app.engine")
+        # Windows can't symlink a venv Python without privileges; point at this one.
+        if python is None and os.name != "posix":
+            python = sys.executable
         self.events = queue.Queue()
         self.thread_ids = []
         def callback(event):
             self.thread_ids.append(threading.get_ident())
             self.events.put(event)
-        client = engine.EngineClient(callback, root=root, log_path=root / "private/engine.log")
+        client = engine.EngineClient(callback, root=root, log_path=root / "private/engine.log",
+                                     python=python)
         self.addCleanup(client.close)
         return client
 
@@ -73,10 +92,10 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(all(tid != threading.get_ident() for tid in self.thread_ids))
         client.close()
         client.close()
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child_pid, 0)
+        self.assertTrue(gone(child_pid))
         self.assertTrue(self.events.empty(), "normal close must not emit fatal child death")
-        self.assertEqual((root / "private/engine.log").stat().st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual((root / "private/engine.log").stat().st_mode & 0o777, 0o600)
         self.assertIn("explicit fake pipeline", (root / "private/engine.log").read_text())
 
     def test_unexpected_worker_death_emits_fatal_error_on_reader_thread(self):
@@ -94,13 +113,13 @@ class EngineTests(unittest.TestCase):
 
     def test_missing_venv_emits_actionable_fatal_event_instead_of_raising(self):
         root = self.make_root()
-        (root / ".venv/bin/python").unlink()
-        client = self.make_client(root)
+        missing = root / ".venv" / "no-such-python"
+        client = self.make_client(root, python=missing)
         client.start()
         error = self.event()
         self.assertEqual(error["type"], "error")
         self.assertTrue(error["fatal"])
-        self.assertIn(".venv/bin/python", error["message"])
+        self.assertIn(str(missing), error["message"])
         self.assertTrue(all(tid != threading.get_ident() for tid in self.thread_ids))
 
     def test_unresponsive_worker_cannot_block_request_submission(self):
@@ -121,7 +140,7 @@ class EngineTests(unittest.TestCase):
         blocked = sender.is_alive()
         # Always release a blocked writer before asserting, even in RED.
         if blocked:
-            os.kill(ready["pid"], 9)
+            psutil.Process(ready["pid"]).kill()
             sender.join(timeout=2)
         self.assertFalse(blocked, "transcribe blocked when the worker pipe filled")
         self.assertTrue(outcome)
@@ -137,8 +156,7 @@ class EngineTests(unittest.TestCase):
         started = time.monotonic()
         client.close()
         self.assertLess(time.monotonic() - started, 5)
-        with self.assertRaises(ProcessLookupError):
-            os.kill(ready["pid"], 0)
+        self.assertTrue(gone(ready["pid"]))
         self.assertTrue(self.events.empty())
 
     def test_close_during_start_does_not_leave_reader_or_worker(self):
@@ -170,6 +188,16 @@ class EngineTests(unittest.TestCase):
         client._reader.join(timeout=3)
         self.assertFalse(client._reader.is_alive())
         self.assertTrue(self.events.empty())
+
+
+class WriterThreadEngineTests(EngineTests):
+    """The same tests through the writer thread that Windows uses (no PIPE_BUF there)."""
+
+    def setUp(self):
+        engine = importlib.import_module("dogspeak_app.engine")
+        original = engine.ATOMIC_PIPE_WRITES
+        engine.ATOMIC_PIPE_WRITES = False
+        self.addCleanup(setattr, engine, "ATOMIC_PIPE_WRITES", original)
 
 
 if __name__ == "__main__":

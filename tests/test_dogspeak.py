@@ -97,6 +97,7 @@ class CLITests(unittest.TestCase):
                     if not isinstance(error, KeyboardInterrupt):
                         self.assertIn(str(error), stderr.getvalue())
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "run.sh and pw-record are Linux only")
     def test_run_script_is_offline_and_uses_project_venv_from_other_directory(self):
         script = ROOT / "run.sh"
         self.assertTrue(script.is_file(), "run.sh is missing")
@@ -303,6 +304,17 @@ class PipelineTests(unittest.TestCase):
 
 
 class BenchmarkTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "the Windows peak comes from psutil")
+    def test_windows_peak_memory_comes_from_the_working_set(self):
+        import dogspeak
+        import psutil
+        with mock.patch.object(psutil, "Process") as process:
+            process.return_value.memory_info.return_value.rss = 12345
+            process.return_value.memory_info.return_value.peak_wset = 67890
+            memory = dogspeak.memory_usage()
+        self.assertEqual(memory, {"current_rss_bytes": 12345, "process_peak_rss_bytes": 67890})
+
+    @unittest.skipIf(sys.platform == "win32", "Windows reports its peak through psutil; see the next test")
     def test_current_and_process_peak_memory_are_distinct_bytes(self):
         import dogspeak
         import psutil
@@ -367,6 +379,7 @@ class BenchmarkTests(unittest.TestCase):
         json.dumps(result, allow_nan=False)
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "run.sh and pw-record are Linux only")
 class RecordingTests(unittest.TestCase):
     def test_pipewire_sigint_exit_one_accepts_valid_audio_not_early_failure(self):
         import dogspeak

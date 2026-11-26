@@ -15,7 +15,8 @@ import urllib.request
 
 TIMEOUT_SECONDS = 90
 MAX_SUGGESTIONS = 5
-ROOT = Path(__file__).resolve().parents[1]
+from .paths import ROOT, no_window_flags, venv_python
+
 CLAUDE_URL = "https://api.anthropic.com"
 
 # (name, base URL, needs an API key). The first is the default.
@@ -220,15 +221,15 @@ class ClaudeClient:
         self.name = "Claude"
 
     def _call(self, request):
-        python = self.root / ".venv/bin/python"
+        python = venv_python(self.root)
         if not python.exists():
             raise LLMError("Claude needs the project environment; run uv sync in the Dogspeak folder")
         request = dict(request, api_key=self.api_key, model=self.model)
         env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
         try:
             result = self.runner([str(python), "-m", "dogspeak_app.claude"], input=json.dumps(request),
-                                 capture_output=True, text=True, cwd=self.root, env=env,
-                                 timeout=self.timeout)
+                                 capture_output=True, text=True, encoding="utf-8", cwd=self.root,
+                                 env=env, timeout=self.timeout, creationflags=no_window_flags())
         except subprocess.TimeoutExpired as error:
             raise LLMError("Claude didn't answer in time") from error
         except OSError as error:
