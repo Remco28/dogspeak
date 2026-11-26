@@ -1,0 +1,57 @@
+name: windows installer
+# Builds the installer and proves it installs, works and uninstalls cleanly.
+# A tag such as v0.3.0 also publishes it as a GitHub release.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    # Branch pushes build only when the installer could change; tag pushes always build.
+    paths:
+      - "installer/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/installer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - name: Model files
+        uses: actions/cache@v4
+        with:
+          path: |
+            models
+            samples
+          key: models-${{ hashFiles('upstream.json') }}
+      - run: python fetch_models.py
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+      - run: python installer/build.py
+      - name: Install, use, uninstall, compare
+        shell: pwsh
+        run: python installer/check_install.py (Get-ChildItem build\Dogspeak-*-Setup.exe).FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dogspeak-windows-installer
+          path: build/Dogspeak-*-Setup.exe
+          retention-days: 14
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notes = "installer/release-notes/$tag.md"
+          gh release create $tag (Get-ChildItem build\Dogspeak-*-Setup.exe).FullName --title "Dogspeak $($tag.TrimStart('v'))" --notes-file $notes
