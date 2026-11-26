@@ -99,8 +99,9 @@ def run(request):
 
 def main():
     try:
-        request = json.loads(sys.stdin.read())
-    except ValueError:
+        # UTF-8 on every system; Windows would otherwise decode with its code page.
+        request = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
         reply = {"ok": False, "error": "Bad request to the Claude helper"}
     else:
         reply = run(request)

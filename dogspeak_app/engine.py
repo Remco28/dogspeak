@@ -2,21 +2,26 @@
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import threading
 
-ROOT = Path(__file__).resolve().parents[1]
+from .paths import ROOT, no_window_flags, state_dir, venv_python
+
+# Linux can make one small pipe write atomic and non-blocking. Windows has no
+# PIPE_BUF, so there a writer thread does the blocking writes instead.
+ATOMIC_PIPE_WRITES = hasattr(os, "fpathconf")
 
 
 class EngineClient:
     """Callbacks run on the reader thread; GUI callers must marshal them."""
-    def __init__(self, callback, root=ROOT, log_path=None):
+    def __init__(self, callback, root=ROOT, log_path=None, python=None):
         self.callback = callback
         self.root = Path(root)
-        self.log_path = Path(log_path) if log_path is not None else (
-            Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
-            / "dogspeak/worker.log")
+        self.python = Path(python) if python is not None else venv_python(self.root)
+        self.log_path = Path(log_path) if log_path is not None else state_dir() / "worker.log"
         self._process = None
+        self._outbox = None
         self._reader = None
         self._log = None
         self._closing = False
@@ -37,24 +42,33 @@ class EngineClient:
                 if self._closing:
                     return
                 self.log_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                fd = os.open(self.log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-                os.fchmod(fd, 0o600)
+                flags = (os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+                fd = os.open(self.log_path, flags, 0o600)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
                 self._log = os.fdopen(fd, "wb", buffering=0)
                 env = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
                            HF_HUB_DISABLE_TELEMETRY="1")
                 self._process = subprocess.Popen(
-                    [str(self.root / ".venv/bin/python"), "-u", "-m", "dogspeak_app.worker"],
+                    [str(self.python), "-u", "-m", "dogspeak_app.worker"],
                     cwd=self.root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=self._log, text=True, encoding="utf-8", bufsize=1, start_new_session=True,
+                    creationflags=no_window_flags(),
                 )
                 assert self._process.stdin is not None
-                os.set_blocking(self._process.stdin.fileno(), False)
+                if ATOMIC_PIPE_WRITES:
+                    os.set_blocking(self._process.stdin.fileno(), False)
+                else:
+                    self._outbox = queue.Queue(maxsize=4)
+                    threading.Thread(target=self._write_outbox, args=(self._process, self._outbox),
+                                     name="dogspeak-engine-writer", daemon=True).start()
         except OSError as error:
             if self._log is not None:
                 self._log.close()
             if not self._closing:
                 self.callback({"type": "error", "id": None, "fatal": True,
-                               "message": f"Cannot start offline inference worker; check {self.root / '.venv/bin/python'}: {error}"})
+                               "message": f"Cannot start offline inference worker; check {self.python}: {error}"})
             return
         self._read_events()
 
@@ -89,6 +103,12 @@ class EngineClient:
             assert stream is not None
             fd = stream.fileno()
             payload = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
+            if self._outbox is not None:
+                try:
+                    self._outbox.put_nowait(payload)
+                except queue.Full as error:
+                    raise RuntimeError("Inference worker is busy; wait before retrying") from error
+                return
             # Atomic nonblocking writes: a stalled/dead worker must never hang
             # the GUI, including during shutdown. The UI submits one job at a time.
             if len(payload) > os.fpathconf(fd, "PC_PIPE_BUF"):
@@ -99,6 +119,17 @@ class EngineClient:
                 raise RuntimeError("Inference worker is busy; wait before retrying") from error
             except OSError as error:
                 raise RuntimeError("Cannot contact inference worker; restart Dogspeak") from error
+
+    @staticmethod
+    def _write_outbox(child, outbox):
+        """Blocking writes off the UI thread; a stalled worker only stalls this thread."""
+        fd = child.stdin.fileno()
+        while (payload := outbox.get()) is not None:
+            try:
+                while payload:
+                    payload = payload[os.write(fd, payload):]
+            except OSError:
+                return
 
     def transcribe(self, path, request_id):
         if self._closing:
@@ -117,6 +148,11 @@ class EngineClient:
                     self._send({"action": "shutdown"})
             except (OSError, RuntimeError):
                 pass
+            if self._outbox is not None:
+                try:
+                    self._outbox.put_nowait(None)
+                except queue.Full:
+                    pass
             try:
                 child.wait(timeout=1)
             except subprocess.TimeoutExpired:

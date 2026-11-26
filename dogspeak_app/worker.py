@@ -1,11 +1,12 @@
 """Offline inference subprocess. Stdout is exclusively JSON lines."""
+import io
 import json
 import os
 import sys
 import time
 
 
-def serve(output):
+def serve(output, requests=None):
     def emit(kind, **fields):
         output.write(json.dumps({"type": kind, **fields}, ensure_ascii=False,
                                 allow_nan=False) + "\n")
@@ -22,7 +23,9 @@ def serve(output):
         emit("error", id=None, message=str(error), fatal=True)
         return 1
     emit("ready", load_seconds=time.perf_counter() - started, pid=os.getpid())
-    for line in sys.stdin:
+    # UTF-8 on every system; Windows would otherwise decode with its code page.
+    requests = requests or io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8")
+    for line in requests:
         request_id = None
         try:
             request = json.loads(line)
@@ -53,7 +56,7 @@ def main():
     sys.stdout.flush()
     protocol_fd = os.dup(sys.stdout.fileno())
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
-    with os.fdopen(protocol_fd, "w", encoding="utf-8", buffering=1) as output:
+    with os.fdopen(protocol_fd, "w", encoding="utf-8", newline="\n", buffering=1) as output:
         return serve(output)
 
 

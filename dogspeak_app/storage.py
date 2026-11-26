@@ -57,9 +57,11 @@ class Store:
             directory.mkdir(mode=0o700, exist_ok=True)
             directory.chmod(0o700)
         path.parent.chmod(0o700)
-        descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        # Windows has neither flag; the profile folder's access list keeps it private there.
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            os.fchmod(descriptor, 0o600)
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, 0o600)
         finally:
             os.close(descriptor)
         self._connection = sqlite3.connect(path)
