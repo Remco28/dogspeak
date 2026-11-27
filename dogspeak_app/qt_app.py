@@ -1459,3 +1459,7 @@ def main(argv=None):
     if window.shortcut_problem and window.tray is not None:
         window.tray.showMessage('Dogspeak', window.shortcut_problem, QSystemTrayIcon.Warning, 6000)
     return app.exec()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

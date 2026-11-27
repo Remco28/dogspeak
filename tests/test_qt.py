@@ -538,5 +538,17 @@ class SingleInstanceTests(unittest.TestCase):
                 self.app.processEvents()
         self.assertEqual([c['n'] for c in received], list(range(10)))
 
+    def test_running_the_module_starts_the_app(self):
+        """The Start menu shortcut and dogspeak.cmd run `-m dogspeak_app.qt_app`.
+        Without the __main__ block that imports the module and quits, silently."""
+        import subprocess
+        import sys
+        result = subprocess.run([sys.executable, '-m', 'dogspeak_app.qt_app', '--help'],
+                                capture_output=True, text=True, timeout=60,
+                                cwd=str(Path(__file__).resolve().parents[1]))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--toggle-recording', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
