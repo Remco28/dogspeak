@@ -1,6 +1,6 @@
 [project]
 name = "dogspeak"
-version = "0.3.0"
+version = "0.4.0"
 description = "Local dictation scratchpad for Linux (GNOME) and Windows that turns rambling speech into clear prompts"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
