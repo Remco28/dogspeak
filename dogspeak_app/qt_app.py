@@ -2,9 +2,10 @@
 
     .venv\\Scripts\\pythonw.exe -m dogspeak_app.qt_app [--toggle-recording] [--import-audio FILE]
 
-The draft logic is the shared Controller (controller.py) and Clean up
-(cleanup.py); this module is only the window, tray, pill and shortcuts. It
-also runs on Linux for tests and development, without a global shortcut.
+Field Recorder + ON AIR Focused Instrument layout: slim header with the
+puppy-at-the-microphone mark, eye-level Hero Instrument Strip with a 1:55
+tape meter, centered draft sheet, and a bottom Instrument Dock that wraps
+cleanly down to 440 px wide.
 """
 import argparse
 import getpass
@@ -17,13 +18,15 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QIcon, QKeySequence, QTextCursor, QTextDocument
+from PySide6.QtCore import QEvent, QObject, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QAction, QColor, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap,
+    QTextCursor, QTextDocument)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextDocumentLayout, QProgressBar,
-    QPushButton, QSystemTrayIcon, QToolBar, QToolButton, QVBoxLayout, QWidget)
+    QApplication, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextDocumentLayout,
+    QPushButton, QSizePolicy, QSystemTrayIcon, QToolButton, QVBoxLayout, QWidget)
 
 from . import hotkeys, paths
 from . import qt_design as d
@@ -31,7 +34,14 @@ from .controller import Controller, background
 from .qt_cleanup import CleanupView, SettingsDialog
 from .qt_editor import DraftEditor, to_qt
 from .qt_overlay import Pill
-from .ui_values import FEEDBACK_SECONDS
+from .ui_values import (
+    FEEDBACK_SECONDS,
+    MAX_RECORDING_LABEL,
+    MAX_RECORDING_SECONDS,
+    NEAR_CAP_SECONDS,
+    format_cap_readout,
+    format_duration,
+)
 
 APP_ID = 'io.github.Remco28.Dogspeak'
 APP_MUTEX = 'io.github.Remco28.Dogspeak.Running'
@@ -46,6 +56,84 @@ def app_icon():
         icon.addFile(str(paths.ROOT / 'data' / 'icons' / 'hicolor' / f'{size}x{size}' / 'apps'
                          / f'{APP_ID}.png'))
     return icon
+
+
+def logo_pixmap(size):
+    path = paths.ROOT / 'data' / 'icons' / 'hicolor' / '128x128' / 'apps' / f'{APP_ID}.png'
+    pix = QPixmap(str(path))
+    if pix.isNull():
+        return pix
+    return pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
+def _repolish(widget):
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+
+
+class TapeMeter(QWidget):
+    """6 px ruled hardware progress rail for 1:55 recording cap & busy states."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(d.METER_HEIGHT)
+        self.mode = 'hidden'
+        self.fraction = 0.0
+        self.phase = 0.0
+        self.hide()
+
+    def set_state(self, mode, fraction=None, phase=0.0):
+        self.mode = mode
+        if fraction is not None:
+            self.fraction = max(0.0, min(1.0, float(fraction)))
+        self.phase = phase % 1.0
+        self.setVisible(mode != 'hidden')
+        self.update()
+
+    def paintEvent(self, _event):
+        if self.mode == 'hidden':
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pal = d.palette(d.is_dark(self))
+        w, h = float(self.width()), float(self.height())
+        if w <= 0 or h <= 0:
+            return
+        track = QColor(pal['ink'])
+        track.setAlpha(30)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(track)
+        painter.drawRoundedRect(QRectF(0, 0, w, h), 2.5, 2.5)
+
+        colour_key = {
+            'recording': 'accent',
+            'nearcap': 'warn',
+            'loading': 'warn',
+            'transcribing': 'local',
+            'llm': 'ext',
+        }.get(self.mode, 'accent')
+        fill = QColor(pal[colour_key])
+        painter.setBrush(fill)
+        if self.mode in ('recording', 'nearcap'):
+            fill_w = max(4.0, w * self.fraction) if self.fraction > 0 else 0.0
+            if fill_w > 0:
+                painter.drawRoundedRect(QRectF(0, 0, fill_w, h), 2.5, 2.5)
+        else:
+            # Indeterminate stepped bar, no animations — updates on the 200 ms tick.
+            seg_w = max(44.0, w * 0.34)
+            x = (w + seg_w) * self.phase - seg_w
+            painter.setClipRect(QRectF(0, 0, w, h))
+            painter.drawRoundedRect(QRectF(x, 0, seg_w, h), 2.5, 2.5)
+            painter.setClipping(False)
+
+        # Broadcast scale tick dividers (5 equal segments along the 1:55 track).
+        tick = QColor(pal['canvas'])
+        tick.setAlpha(185)
+        painter.setBrush(tick)
+        for i in range(1, 5):
+            tx = w * (i / 5.0)
+            painter.drawRect(QRectF(tx - 1.0, 0, 2.0, h))
 
 
 class Dispatcher(QObject):
@@ -97,15 +185,16 @@ class DraftsDialog(QDialog):
         title.setFont(bold)
         preview = QLabel(draft.content.replace('\n', ' ')[:100] or 'Empty draft')
         preview.setTextFormat(Qt.PlainText)
-        preview.setStyleSheet(d.CAPTION_STYLE)
+        preview.setProperty('muted', True)
         text.addWidget(title)
         text.addWidget(preview)
         line.addLayout(text, 1)
         delete = QToolButton()
+        delete.setObjectName('flatBtn')
         delete.setText('Delete')
-        delete.setAutoRaise(True)
         delete.setToolTip('Delete draft')
         delete.setAccessibleName(f'Delete {draft.title or "Untitled"}')
+        delete.setCursor(Qt.PointingHandCursor)
         delete.clicked.connect(lambda _=False, dr=draft, it=item: self.main.confirm_delete(dr, it, self))
         line.addWidget(delete)
         item.setSizeHint(row.sizeHint())
@@ -124,8 +213,12 @@ class ScratchpadWindow(QMainWindow):
         self.controller, self.cleanup = controller, cleanup
         self.setWindowTitle('Dogspeak')
         self.setWindowIcon(app_icon())
-        self.resize(1100, 720)
+        self.setMinimumWidth(d.MIN_WINDOW_WIDTH)
+        self.resize(d.DEFAULT_WINDOW_WIDTH, d.DEFAULT_WINDOW_HEIGHT)
         self.rendering = self.closing = False
+        self._narrow = None
+        self._dark_theme = d.is_dark(QApplication.instance())
+        self._updating_theme = False
         self.last_edit, self.typing_pause = float('-inf'), 1.0
         self.documents = {}
         self.displayed_draft = None
@@ -138,21 +231,36 @@ class ScratchpadWindow(QMainWindow):
         self.editor = DraftEditor()
         self.cleanup_view = CleanupView(self, cleanup)
         self._build_actions()
-        self._build_toolbar()
+
         central = QWidget()
+        central.setObjectName('central')
         column = QVBoxLayout(central)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
-        column.addWidget(self.cleanup_view.bar)
-        column.addWidget(self.cleanup_view.banner)
+        column.addWidget(self._build_header())
+
         body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-        body.addWidget(self.editor, 1)
+
+        stage = QWidget()
+        stage.setObjectName('editorStage')
+        stage_col = QVBoxLayout(stage)
+        stage_col.setContentsMargins(0, 0, 0, 0)
+        stage_col.setSpacing(0)
+        stage_col.addWidget(self._build_hero_strip())
+        stage_col.addWidget(self.cleanup_view.banner)
+        stage_col.addWidget(self.editor, 1)
+        stage_col.addWidget(self._build_notice())
+        stage_col.addWidget(self._build_dock())
+
+        body.addWidget(stage, 1)
         body.addWidget(self.cleanup_view.panel)
         column.addLayout(body, 1)
-        column.addWidget(self._build_notice())
-        column.addWidget(self._build_status())
         self.setCentralWidget(central)
+
+        self.editor.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.editor.customContextMenuRequested.connect(self._editor_menu)
 
         c = controller
         c.on_draft = self.render_draft
@@ -177,6 +285,7 @@ class ScratchpadWindow(QMainWindow):
         if self.shortcut_problem:
             log.warning('shortcut: %s', self.shortcut_problem)
 
+        self._apply_responsive_layout(self.width())
         self.render_draft(c.draft)
         self.cleanup_view.refresh()
         self.tick_timer = QTimer(self, interval=200)
@@ -215,49 +324,70 @@ class ScratchpadWindow(QMainWindow):
             self.addAction(action)
             self.actions_by_name[name] = action
 
-    def _tool(self, text, tooltip, action=None, slot=None):
+    def _tool(self, text, tooltip, action=None, slot=None, flat=False):
         button = QToolButton()
+        if flat:
+            button.setObjectName('flatBtn')
         button.setText(text)
         button.setToolTip(tooltip)
-        button.setAccessibleName(text)
+        button.setAccessibleName(text.replace('&&', 'and'))
+        button.setCursor(Qt.PointingHandCursor)
         button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         button.clicked.connect(slot or (lambda: self.actions_by_name[action].trigger()))
         return button
 
-    def _build_toolbar(self):
-        bar = QToolBar('Main')
-        bar.setMovable(False)
-        bar.setFloatable(False)
-        bar.setContextMenuPolicy(Qt.PreventContextMenu)
-        bar.layout().setSpacing(d.SPACE_XS)
-        bar.addWidget(self._tool('New', 'New draft (Ctrl+N)', 'new-draft'))
-        bar.addWidget(self._tool('Open', 'Open a draft (Ctrl+O)', 'open-draft'))
+    def _build_header(self):
+        header = QFrame()
+        header.setObjectName('headerBar')
+        row = QHBoxLayout(header)
+        row.setContentsMargins(d.SPACE_M, d.SPACE_S, d.SPACE_M, d.SPACE_S)
+        row.setSpacing(d.SPACE_S)
+
+        logo = QLabel()
+        pix = logo_pixmap(d.LOGO_HEADER)
+        if not pix.isNull():
+            logo.setPixmap(pix)
+        logo.setFixedSize(d.LOGO_HEADER, d.LOGO_HEADER)
+        logo.setToolTip('Dogspeak')
+        row.addWidget(logo)
+
+        self.wordmark = QLabel('Dogspeak')
+        self.wordmark.setObjectName('wordmark')
+        row.addWidget(self.wordmark)
+
         self.title_entry = QLineEdit()
+        self.title_entry.setObjectName('titleEntry')
         self.title_entry.setPlaceholderText('Draft title')
         self.title_entry.setToolTip('Draft title')
         self.title_entry.setAccessibleName('Draft title')
-        self.title_entry.setMinimumWidth(220)
-        self.title_entry.setMaximumWidth(520)
+        self.title_entry.setMinimumWidth(110)
+        self.title_entry.setMaximumWidth(280)
         self.title_entry.textEdited.connect(lambda _t: self._changed(title=True))
-        spacer_left, spacer_right = QWidget(), QWidget()
-        for spacer in (spacer_left, spacer_right):
-            spacer.setSizePolicy(spacer.sizePolicy().Policy.Expanding,
-                                 spacer.sizePolicy().Policy.Preferred)
-        bar.addWidget(spacer_left)
-        bar.addWidget(self.title_entry)
-        bar.addWidget(spacer_right)
-        bar.addWidget(self._tool('Copy all', 'Copy the whole draft (Ctrl+Shift+C)', 'copy-all'))
-        self.copy_clear_button = self._tool('Copy && Clear', 'Copy all text and clear this draft '
-                                            '(Ctrl+Shift+X)', 'copy-clear')
-        self.copy_clear_button.setAccessibleName('Copy and clear')
-        bar.addWidget(self.copy_clear_button)
-        bar.addWidget(self.cleanup_view.panel_button)
-        self.record_button = QPushButton('●  Record')
-        self.record_button.setAccessibleName('Record')
-        self.record_button.setMinimumHeight(d.CONTROL_HEIGHT)
-        self.record_button.clicked.connect(lambda: self.perform(self.toggle_recording))
-        bar.addWidget(self.record_button)
+        row.addWidget(self.title_entry, 1)
+
+        self.new_button = self._tool('New', 'New draft (Ctrl+N)', 'new-draft', flat=True)
+        self.open_button = self._tool('Drafts', 'Open a draft (Ctrl+O)', 'open-draft', flat=True)
+        row.addWidget(self.new_button)
+        row.addWidget(self.open_button)
+        row.addStretch(1)
+
+        self.sources = [None]
+        self.updating_sources = False
+        self.microphone = QComboBox()
+        self.microphone.addItem('System default')
+        self.microphone.setToolTip('Microphone')
+        self.microphone.setAccessibleName('Microphone')
+        self.microphone.setMinimumWidth(120)
+        self.microphone.setMaximumWidth(190)
+        self.microphone.currentIndexChanged.connect(self._microphone_changed)
+        row.addWidget(self.microphone)
+
+        row.addWidget(self.cleanup_view.panel_button)
+
         menu = QMenu(self)
+        for name in ('new-draft', 'open-draft'):
+            menu.addAction(self.actions_by_name[name])
+        menu.addSeparator()
         for name in ('copy-all', 'copy-clear', 'clear'):
             menu.addAction(self.actions_by_name[name])
         menu.addSeparator()
@@ -273,12 +403,193 @@ class ScratchpadWindow(QMainWindow):
         self.menu_button.setObjectName('menu')
         self.menu_button.setToolTip('Main menu')
         self.menu_button.setAccessibleName('Main menu')
+        self.menu_button.setCursor(Qt.PointingHandCursor)
         self.menu_button.setPopupMode(QToolButton.InstantPopup)
         self.menu_button.setMenu(menu)
-        bar.addWidget(self.menu_button)
-        self.addToolBar(bar)
-        self.editor.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.editor.customContextMenuRequested.connect(self._editor_menu)
+        row.addWidget(self.menu_button)
+        return header
+
+    def _build_hero_strip(self):
+        """Eye-level ON AIR / Field Recorder status strip directly above the draft."""
+        wrap = QWidget()
+        wrap.setObjectName('heroWrap')
+        outer = QHBoxLayout(wrap)
+        outer.setContentsMargins(d.SPACE_M, d.SPACE_M, d.SPACE_M, 0)
+        outer.setSpacing(0)
+
+        self.hero_strip = QFrame()
+        self.hero_strip.setObjectName('heroStrip')
+        self.hero_strip.setMaximumWidth(d.EDITOR_MAX_WIDTH + 60)
+        self.hero_strip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        vbox = QVBoxLayout(self.hero_strip)
+        vbox.setContentsMargins(d.SPACE_M, d.SPACE_S, d.SPACE_M, d.SPACE_S)
+        vbox.setSpacing(d.SPACE_S)
+
+        top = QHBoxLayout()
+        top.setSpacing(d.SPACE_S)
+
+        self.hero_mascot = QLabel()
+        pix = logo_pixmap(d.LOGO_HERO)
+        if not pix.isNull():
+            self.hero_mascot.setPixmap(pix)
+        self.hero_mascot.setFixedSize(d.LOGO_HERO, d.LOGO_HERO)
+        self.hero_mascot.hide()
+        top.addWidget(self.hero_mascot)
+
+        self.state_lamp = QLabel('WARMING UP')
+        self.state_lamp.setObjectName('stateLamp')
+        top.addWidget(self.state_lamp)
+
+        self.status_label = QLabel()
+        self.status_label.setObjectName('heroStatus')
+        self.status_label.setTextFormat(Qt.PlainText)
+        self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.status_label.setWordWrap(True)
+        # Accessible name stays the text itself so screen readers and UI tests read it.
+        self.status_label.setAccessibleDescription('Status')
+        top.addWidget(self.status_label, 1)
+
+        self.hero_hint = QLabel()
+        self.hero_hint.setObjectName('heroHint')
+        self.hero_hint.setTextFormat(Qt.PlainText)
+        self.hero_hint.hide()
+        top.addWidget(self.hero_hint)
+
+        self.timer_label = QLabel()
+        self.timer_label.setObjectName('heroTimer')
+        self.timer_label.setTextFormat(Qt.PlainText)
+        top.addWidget(self.timer_label)
+
+        vbox.addLayout(top)
+        self.tape_meter = TapeMeter()
+        self.busy = self.tape_meter
+        vbox.addWidget(self.tape_meter)
+
+        outer.addStretch(1)
+        outer.addWidget(self.hero_strip, 100)
+        outer.addStretch(1)
+        return wrap
+
+    def _build_dock(self):
+        """Bottom Field Recorder Instrument Dock: Speak · Refine · Ship."""
+        wrap = QWidget()
+        wrap.setObjectName('dockWrap')
+        outer = QHBoxLayout(wrap)
+        outer.setContentsMargins(d.SPACE_M, d.SPACE_S, d.SPACE_M, d.SPACE_M)
+        outer.setSpacing(0)
+
+        self.dock = QFrame()
+        self.dock.setObjectName('dock')
+        self.dock.setMaximumWidth(d.EDITOR_MAX_WIDTH + 60)
+        self.dock.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.dock_vbox = QVBoxLayout(self.dock)
+        self.dock_vbox.setContentsMargins(d.SPACE_S, d.SPACE_S, d.SPACE_S, d.SPACE_S)
+        self.dock_vbox.setSpacing(d.SPACE_S)
+
+        self.dock_row1_widget = QWidget()
+        self.dock_row1 = QHBoxLayout(self.dock_row1_widget)
+        self.dock_row1.setContentsMargins(0, 0, 0, 0)
+        self.dock_row1.setSpacing(d.SPACE_S)
+
+        self.dock_row2_widget = QWidget()
+        self.dock_row2 = QHBoxLayout(self.dock_row2_widget)
+        self.dock_row2.setContentsMargins(0, 0, 0, 0)
+        self.dock_row2.setSpacing(d.SPACE_S)
+
+        self.record_button = QPushButton('●  Record')
+        self.record_button.setObjectName('recordBtn')
+        self.record_button.setAccessibleName('Record')
+        self.record_button.setCursor(Qt.PointingHandCursor)
+        self.record_button.setMinimumHeight(d.CONTROL_HEIGHT)
+        self.record_button.clicked.connect(lambda: self.perform(self.toggle_recording))
+
+        self.dock_div1 = QFrame()
+        self.dock_div1.setObjectName('dockDivider')
+        self.dock_div2 = QFrame()
+        self.dock_div2.setObjectName('dockDivider')
+
+        self.copy_clear_button = QPushButton('Copy && Clear')
+        self.copy_clear_button.setObjectName('copyClearBtn')
+        self.copy_clear_button.setToolTip('Copy all text and clear this draft (Ctrl+Shift+X)')
+        self.copy_clear_button.setAccessibleName('Copy and clear')
+        self.copy_clear_button.setCursor(Qt.PointingHandCursor)
+        self.copy_clear_button.clicked.connect(lambda: self.actions_by_name['copy-clear'].trigger())
+
+        self.copy_all_button = self._tool('Copy', 'Copy the whole draft (Ctrl+Shift+C)', 'copy-all')
+
+        self.dock_vbox.addWidget(self.dock_row1_widget)
+        self.dock_vbox.addWidget(self.dock_row2_widget)
+
+        outer.addStretch(1)
+        outer.addWidget(self.dock, 100)
+        outer.addStretch(1)
+        return wrap
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+    def _apply_responsive_layout(self, width=None):
+        """Switch cleanly between single-row wide dock and two-row narrow dock."""
+        total_w = self.width() if width is None else width
+        panel_w = d.PANEL_WIDTH if not self.cleanup_view.panel.isHidden() else 0
+        stage_w = total_w - panel_w
+        narrow_header = total_w < d.NARROW_BREAKPOINT
+        narrow_dock = stage_w < d.NARROW_BREAKPOINT
+        state = (narrow_header, narrow_dock)
+        if state == self._narrow:
+            return
+        self._narrow = state
+        self.wordmark.setVisible(not narrow_header)
+        self.new_button.setVisible(not narrow_header)
+        self.open_button.setVisible(not narrow_header)
+        self.microphone.setMaximumWidth(135 if narrow_header else 190)
+
+        self._clear_layout(self.dock_row1)
+        self._clear_layout(self.dock_row2)
+        if narrow_dock:
+            self.dock_div1.hide()
+            self.dock_div2.hide()
+            self.dock_row1.addWidget(self.record_button, 1)
+            self.dock_row1.addWidget(self.copy_clear_button, 1)
+            self.dock_row1.addWidget(self.copy_all_button)
+            self.dock_row2.addWidget(self.cleanup_view.bar, 1)
+            self.cleanup_view.bar.show()
+            self.dock_row2_widget.show()
+        else:
+            self.dock_row2_widget.hide()
+            self.dock_div1.show()
+            self.dock_div2.show()
+            self.dock_row1.addWidget(self.record_button)
+            self.dock_row1.addWidget(self.dock_div1)
+            self.dock_row1.addWidget(self.cleanup_view.bar, 1)
+            self.dock_row1.addWidget(self.dock_div2)
+            self.dock_row1.addWidget(self.copy_clear_button)
+            self.dock_row1.addWidget(self.copy_all_button)
+            self.cleanup_view.bar.show()
+        self.dock.updateGeometry()
+        self.dock.adjustSize()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_responsive_layout(self.width())
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange and not self._updating_theme:
+            app = QApplication.instance()
+            if app is not None:
+                dark = d.is_dark(app)
+                if dark != self._dark_theme:
+                    self._dark_theme = dark
+                    self._updating_theme = True
+                    try:
+                        app.setStyleSheet(d.stylesheet(dark))
+                    finally:
+                        self._updating_theme = False
 
     def _editor_menu(self, point):
         menu = self.editor.createStandardContextMenu()
@@ -297,6 +608,7 @@ class ScratchpadWindow(QMainWindow):
         self.notice_text.setTextFormat(Qt.PlainText)
         row.addWidget(self.notice_text, 1)
         self.notice_button = QPushButton('Undo')
+        self.notice_button.setCursor(Qt.PointingHandCursor)
         self.notice_button.clicked.connect(self._notice_clicked)
         row.addWidget(self.notice_button)
         self.notice.hide()
@@ -323,39 +635,6 @@ class ScratchpadWindow(QMainWindow):
         self.dismiss_notice()
         if action is not None:
             self.perform(action)
-
-    def _build_status(self):
-        status = QWidget()
-        row = QHBoxLayout(status)
-        row.setContentsMargins(d.SPACE_L, d.SPACE_S, d.SPACE_L, d.SPACE_S)
-        row.setSpacing(d.SPACE_M)
-        self.busy = QProgressBar()
-        self.busy.setRange(0, 0)
-        self.busy.setTextVisible(False)
-        self.busy.setFixedWidth(64)
-        self.busy.setMaximumHeight(d.ICON // 2)
-        row.addWidget(self.busy)
-        self.status_label = QLabel()
-        self.status_label.setTextFormat(Qt.PlainText)
-        self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.status_label.setWordWrap(True)
-        # The accessible name stays the text itself, so screen readers and UI tests read it.
-        self.status_label.setAccessibleDescription('Status')
-        row.addWidget(self.status_label, 1)
-        self.timer_label = QLabel()
-        self.timer_label.setStyleSheet(d.CAPTION_STYLE)
-        self.timer_label.setMinimumWidth(self.timer_label.fontMetrics().horizontalAdvance('00:00'))
-        row.addWidget(self.timer_label)
-        self.sources = [None]
-        self.updating_sources = False
-        self.microphone = QComboBox()
-        self.microphone.addItem('System default')
-        self.microphone.setToolTip('Microphone')
-        self.microphone.setAccessibleName('Microphone')
-        self.microphone.setMinimumWidth(200)
-        self.microphone.currentIndexChanged.connect(self._microphone_changed)
-        row.addWidget(self.microphone)
-        return status
 
     def _build_tray(self):
         tray = QSystemTrayIcon(app_icon(), self)
@@ -502,6 +781,7 @@ class ScratchpadWindow(QMainWindow):
                 document.setUndoRedoEnabled(True)
             if self.title_entry.text() != draft.title:
                 self.title_entry.setText(draft.title)
+                self.title_entry.setCursorPosition(0)
         finally:
             self.rendering = False
         if switching:
@@ -531,7 +811,9 @@ class ScratchpadWindow(QMainWindow):
     def set_locked(self, locked):
         """While Clean up rewrites this draft, it can't be edited."""
         self.editor.setReadOnly(locked)
-        self.editor.setStyleSheet(f'QPlainTextEdit {{ {d.CAPTION_STYLE} }}' if locked else '')
+        if self.editor.property('locked') != locked:
+            self.editor.setProperty('locked', locked)
+            _repolish(self.editor)
 
     def _status_changed(self):
         # States and their wording only; transcripts never reach the status line.
@@ -542,30 +824,96 @@ class ScratchpadWindow(QMainWindow):
             log.info('status %s: %s', c.state, c.message)
         self.render_status()
 
+    def _set_hero_tone(self, tone, lamp_text, lamp_style):
+        if self.hero_strip.property('tone') != tone:
+            self.hero_strip.setProperty('tone', tone)
+            _repolish(self.hero_strip)
+        if self.state_lamp.text() != lamp_text:
+            self.state_lamp.setText(lamp_text)
+        if self.state_lamp.property('lamp') != lamp_style:
+            self.state_lamp.setProperty('lamp', lamp_style)
+            _repolish(self.state_lamp)
+
     def render_status(self):
         c = self.controller
         recording = c.recording
-        active = recording or c.state in ('loading', 'transcribing')
+        cleanup = self.cleanup
         message = c.message
-        busy = c.state in ('loading', 'transcribing')
         if c.state == 'ready' and self.shortcut_problem:
             message = self.shortcut_problem
-        cleanup = self.cleanup
-        if cleanup.busy and not (recording or c.state == 'transcribing'):
+
+        started_at = c.recording_job['started_at'] if recording else c.started_at
+        elapsed = max(0.0, c.clock() - started_at)
+        elapsed_int = int(elapsed)
+        phase = (elapsed % 1.8) / 1.8
+
+        show_mascot = False
+        hint = ''
+        meter_mode = 'hidden'
+        meter_fraction = 0.0
+
+        if recording:
+            near = elapsed_int >= NEAR_CAP_SECONDS
+            left = max(0, MAX_RECORDING_SECONDS - elapsed_int)
+            tone = 'nearcap' if near else 'recording'
+            lamp = f'● ON AIR · {left}s LEFT' if near else '● ON AIR'
+            timer_text = format_cap_readout(elapsed_int)
+            hint = 'Enter stops · Esc cancels'
+            meter_mode = tone
+            meter_fraction = min(1.0, elapsed / MAX_RECORDING_SECONDS)
+            self._set_hero_tone(tone, lamp, tone)
+        elif c.state == 'transcribing':
+            self._set_hero_tone('transcribing', 'LOCAL CPU', 'transcribing')
+            timer_text = format_duration(elapsed_int)
+            hint = 'Esc drops'
+            meter_mode = 'transcribing'
+        elif cleanup.busy:
             # Clean up doesn't need the speech model, so it outranks "Loading model…".
             from .llm import provider_name
-            message = f'Sending this draft to {provider_name(cleanup.busy["config"]["base_url"])}… Esc cancels.'
-            busy = True
+            cfg = cleanup.busy['config']
+            name = provider_name(cfg['base_url'])
+            short = name.split(' (', 1)[0].upper()
+            is_local_llm = not cleanup.needs_key(cfg['base_url'])
+            message = f'Sending this draft to {name}… Esc cancels.'
+            lamp = f'LOCAL LLM · {short}' if is_local_llm else f'↗ EXTERNAL · {short}'
+            llm_elapsed = max(0.0, time.monotonic() - cleanup.busy.get('started_at', time.monotonic()))
+            phase = (llm_elapsed % 1.8) / 1.8
+            self._set_hero_tone('llm', lamp, 'llm')
+            timer_text = format_duration(int(llm_elapsed))
+            hint = cfg.get('model') or ''
+            meter_mode = 'llm'
+            show_mascot = True
+        elif c.state == 'loading':
+            self._set_hero_tone('loading', 'WARMING UP', 'loading')
+            timer_text = format_duration(elapsed_int)
+            hint = 'You can type while Bark loads'
+            meter_mode = 'loading'
+            show_mascot = True
+        elif c.state == 'error':
+            self._set_hero_tone('error', 'ERROR', 'error')
+            timer_text = ''
+        else:
+            self._set_hero_tone('ready', 'STANDBY', 'ready')
+            timer_text = f'{MAX_RECORDING_LABEL} / take'
+
+        self.hero_mascot.setVisible(show_mascot and not self.hero_mascot.pixmap().isNull())
         self.status_label.setText(message)
-        self.status_label.setStyleSheet(d.DANGER_STYLE if c.state == 'error' else '')
-        started_at = c.recording_job['started_at'] if recording else c.started_at
-        elapsed = int(max(0, c.clock() - started_at))
-        self.timer_label.setText(f'{elapsed // 60:02}:{elapsed % 60:02}' if active else '')
-        self.busy.setVisible(busy)
+        is_error = c.state == 'error' and not (recording or cleanup.busy)
+        if self.status_label.property('error') != is_error:
+            self.status_label.setProperty('error', is_error)
+            _repolish(self.status_label)
+        self.timer_label.setText(timer_text)
+        narrow_dock = bool(self._narrow and self._narrow[1])
+        self.hero_hint.setText(hint)
+        self.hero_hint.setVisible(bool(hint) and not narrow_dock)
+        self.tape_meter.set_state(meter_mode, meter_fraction, phase)
+
         self.record_button.setText('■  Stop' if recording else '●  Record')
         self.record_button.setAccessibleName('Stop' if recording else 'Record')
         self.record_button.setToolTip(f'{"Stop" if recording else "Record"} ({c.shortcut_label})')
-        self.record_button.setStyleSheet(d.DANGER_STYLE if recording else '')
+        if self.record_button.property('recording') != recording:
+            self.record_button.setProperty('recording', recording)
+            _repolish(self.record_button)
         self.record_button.setEnabled(not c.closed and (recording or c.engine_failed or (
             c.ready and not c.pending and not c.recording_job)))
         self.actions_by_name['toggle-recording'].setText('Stop' if recording else 'Record')
@@ -738,10 +1086,15 @@ class ScratchpadWindow(QMainWindow):
     def _overlay_target(self):
         c = self.controller
         if c.recording:
-            elapsed = int(max(0, c.clock() - c.recording_job['started_at']))
-            return 'recording', f'Recording  {elapsed // 60}:{elapsed % 60:02}', self._stop_hint()
+            elapsed = max(0.0, c.clock() - c.recording_job['started_at'])
+            elapsed_int = int(elapsed)
+            warn = elapsed_int >= NEAR_CAP_SECONDS
+            left = max(0, MAX_RECORDING_SECONDS - elapsed_int)
+            title = f'ON AIR  {format_cap_readout(elapsed_int)}' + (f' · {left}s left' if warn else '')
+            return ('recording', title, self._stop_hint(),
+                    min(1.0, elapsed / MAX_RECORDING_SECONDS), warn)
         if c.state == 'transcribing' and (c.pending or c.recording_job):
-            return 'transcribing', c.message, 'Esc drops this result'
+            return 'transcribing', c.message, 'Esc drops this result', None, False
         return None
 
     def _sync_overlay(self):
@@ -771,12 +1124,12 @@ class ScratchpadWindow(QMainWindow):
             self._announce_ready = False
             self._overlay_flash('info', 'Dogspeak is ready', f'{c.shortcut_label} to record', 2500)
 
-    def _overlay_set(self, state, title, hint):
+    def _overlay_set(self, state, title, hint, progress=None, warn=False):
         self._pill_state = state
-        shown = (state, title, hint)
+        shown = (state, title, hint, None if progress is None else round(progress, 2), warn)
         if shown != self._pill_shown:
             self._pill_shown = shown
-            self.pill.show_state(state, title, hint)
+            self.pill.show_state(state, title, hint, progress=progress, warn=warn)
         keys = {'recording': ('stop', 'cancel'), 'transcribing': ('cancel',)}.get(state, ())
         self._set_keys(keys)
 
@@ -1055,7 +1408,7 @@ def main(argv=None):
     app.setApplicationDisplayName('Dogspeak')
     app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
-    app.setStyleSheet(d.stylesheet())
+    app.setStyleSheet(d.stylesheet(d.is_dark(app)))
     command = command_from(args)
     instance = SingleInstance()
     if instance.send(command):

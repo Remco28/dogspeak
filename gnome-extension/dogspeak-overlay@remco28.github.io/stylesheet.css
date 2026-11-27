@@ -1,24 +1,24 @@
 .dogspeak-pill {
-  background-color: rgba(30, 30, 30, 0.92);
-  color: #ffffff;
+  background-color: rgba(25, 25, 23, 0.94);
+  color: #eceae3;
   border-radius: 999px;
   padding: 10px 20px;
   spacing: 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.11);
 }
 
 .dogspeak-dot {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 6px;
-  background-color: #9a9996;
+  background-color: #969389;
 }
 
-.dogspeak-dot.recording { background-color: #e01b24; }
-.dogspeak-dot.transcribing { background-color: #f6d32d; }
-.dogspeak-dot.saved { background-color: #33d17a; }
-.dogspeak-dot.error { background-color: #ff7800; }
+.dogspeak-dot.recording { background-color: #f0622a; }
+.dogspeak-dot.transcribing { background-color: #e0a229; }
+.dogspeak-dot.saved { background-color: #55b37c; }
+.dogspeak-dot.error { background-color: #ef5350; }
 
 .dogspeak-title {
   font-weight: bold;
@@ -28,8 +28,8 @@
 
 .dogspeak-hint {
   font-size: 10pt;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(236, 234, 227, 0.72);
 }
 
-.dogspeak-tray-recording { color: #e01b24; }
-.dogspeak-tray-transcribing { color: #f6d32d; }
+.dogspeak-tray-recording { color: #f0622a; }
+.dogspeak-tray-transcribing { color: #e0a229; }

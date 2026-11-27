@@ -4,8 +4,8 @@ Qt counts positions in UTF-16 code units, and the rest of Dogspeak counts
 Python characters. to_qt() and from_qt() convert, so an emoji never shifts a
 transcript into the middle of a word.
 """
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QTextBlockFormat, QTextCursor, QTextFormat
+from PySide6.QtCore import QEvent, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QPainter, QTextBlockFormat, QTextCursor, QTextFormat
 from PySide6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
 from . import qt_design as d
@@ -59,6 +59,8 @@ class DraftEditor(QPlainTextEdit):
         font = self.font()
         font.setPointSize(d.TEXT_EDITOR)
         self.setFont(font)
+        self.gutter_font = QFont("Consolas", d.TEXT_BODY)
+        self.gutter_font.setStyleHint(QFont.StyleHint.Monospace)
         self.setAccessibleName("Draft")
         self.gutter = _Gutter(self)
         self.blockCountChanged.connect(self._update_gutter_width)
@@ -84,11 +86,25 @@ class DraftEditor(QPlainTextEdit):
     # Line numbers: one per paragraph, so a wrapped paragraph counts once.
     def gutter_width(self):
         digits = len(str(max(1, self.blockCount())))
-        return d.SPACE_L + self.fontMetrics().horizontalAdvance("9") * max(2, digits)
+        return d.SPACE_M + self.fontMetrics().horizontalAdvance("9") * max(2, digits)
+
+    def _side_inset(self):
+        """Center the measure on wide windows; stay compact on narrow splits."""
+        available = self.contentsRect().width()
+        gutter = self.gutter_width() + d.SPACE_S
+        target = d.EDITOR_MAX_WIDTH + gutter + 2 * d.SPACE_L
+        if available > target:
+            return (available - (d.EDITOR_MAX_WIDTH + gutter)) // 2
+        return d.SPACE_M
 
     def _update_gutter_width(self, *_):
-        self.setViewportMargins(self.gutter_width() + d.SPACE_S, d.EDITOR_MARGIN,
-                                d.EDITOR_MARGIN, d.EDITOR_MARGIN)
+        inset = self._side_inset()
+        left = inset + self.gutter_width() + d.SPACE_S
+        self.setViewportMargins(left, d.EDITOR_MARGIN, inset + d.SPACE_S, d.EDITOR_MARGIN)
+        area = self.contentsRect()
+        self.gutter.setGeometry(QRect(area.left() + inset, area.top() + d.EDITOR_MARGIN,
+                                      self.gutter_width(),
+                                      max(0, area.height() - 2 * d.EDITOR_MARGIN)))
 
     def _update_gutter(self, rect, dy):
         if dy:
@@ -98,13 +114,19 @@ class DraftEditor(QPlainTextEdit):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        area = self.contentsRect()
-        self.gutter.setGeometry(QRect(area.left(), area.top() + d.EDITOR_MARGIN,
-                                      self.gutter_width(), area.height() - 2 * d.EDITOR_MARGIN))
+        self._update_gutter_width()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange:
+            self._highlight_line()
 
     def paint_gutter(self, event):
         painter = QPainter(self.gutter)
-        muted = self.palette().color(self.palette().ColorRole.PlaceholderText)
+        painter.setFont(self.gutter_font)
+        pal = d.palette(d.is_dark(self))
+        muted = QColor(pal["muted"])
+        active = QColor(pal["ink"])
         current = self.textCursor().blockNumber()
         block = self.firstVisibleBlock()
         top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
@@ -112,8 +134,7 @@ class DraftEditor(QPlainTextEdit):
             bottom = top + round(self.blockBoundingRect(block).height())
             if block.isVisible() and bottom >= event.rect().top():
                 number = block.blockNumber()
-                painter.setPen(self.palette().color(self.palette().ColorRole.Text)
-                               if number == current else muted)
+                painter.setPen(active if number == current else muted)
                 painter.drawText(0, top, self.gutter.width() - d.SPACE_S,
                                  self.fontMetrics().height(), Qt.AlignRight, str(number + 1))
             block = block.next()
@@ -121,9 +142,8 @@ class DraftEditor(QPlainTextEdit):
 
     def _highlight_line(self):
         selection = QTextEdit.ExtraSelection()
-        colour = QColor(self.palette().color(self.palette().ColorRole.Highlight))
-        colour.setAlpha(24)
-        selection.format.setBackground(colour)
+        pal = d.palette(d.is_dark(self))
+        selection.format.setBackground(QColor(pal["line_highlight"]))
         selection.format.setProperty(QTextFormat.FullWidthSelection, True)
         selection.cursor = self.textCursor()
         selection.cursor.clearSelection()

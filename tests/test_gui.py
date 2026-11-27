@@ -1773,6 +1773,34 @@ class GtkTests(unittest.TestCase):
         self.assertEqual(shell.shown[-1][1], 'Dogspeak is ready')
         self.assertFalse(self.controller.recording_job, 'ready must never start a recording')
 
+    def test_hero_strip_shows_loading_on_air_cap_and_external_llm(self):
+        win = self.window
+        self.assertEqual(win.state_lamp.get_text(), 'WARMING UP')
+        self.assertTrue(win.tape_meter.get_visible())
+        self.engine.emit('ready')
+        self.assertEqual(win.state_lamp.get_text(), 'STANDBY')
+        self.assertEqual(win.timer_label.get_text(), '1:55 / take')
+        self.assertFalse(win.tape_meter.get_visible())
+        now = [100.0]
+        self.controller.clock = lambda: now[0]
+        self.app.activate_action('toggle-recording', None)
+        now[0] = 152.0
+        win.render_status()
+        self.assertEqual(win.state_lamp.get_text(), '● ON AIR')
+        self.assertEqual(win.timer_label.get_text(), '0:52 / 1:55')
+        self.assertTrue(win.tape_meter.get_visible())
+        now[0] = 202.0
+        win.render_status()
+        self.assertIn('13s LEFT', win.state_lamp.get_text())
+        self.assertEqual(win.timer_label.get_text(), '1:42 / 1:55')
+        self.controller.cancel_recording()
+        win.buffer.insert_at_cursor('draft text')
+        self.pump()
+        self.app.activate_action('clean-up', None)
+        self.assertEqual(win.state_lamp.get_text(), '↗ EXTERNAL · OPENROUTER')
+        self.assertTrue(win.tape_meter.get_visible())
+        win.cleanup.cancel()
+
     def test_quit_releases_shell_keys_and_ends_the_application(self):
         shell = self.use_shell()
         quits = []
