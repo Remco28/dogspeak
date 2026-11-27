@@ -1,4 +1,4 @@
-"""Clean up widgets: the purpose bar, the banner, the suggestions panel, Settings."""
+"""Clean up widgets for GTK4: refine dock row, banner, suggestions panel, Settings."""
 from datetime import datetime
 
 from gi.repository import Adw, GLib, Gtk
@@ -56,18 +56,16 @@ class CleanupView:
         cleanup.on_change = self.refresh
         cleanup.on_replace = window.replace_text
 
-        bar = Gtk.Box(spacing=8, margin_start=12, margin_end=12, margin_top=8, margin_bottom=8)
-        label = Gtk.Label(label='_Purpose', use_underline=True)
-        label.add_css_class('heading')
-        bar.append(label)
-        purpose = Gtk.Box()
+        # Refine row for the bottom Field Recorder Instrument Dock
+        bar = Gtk.Box(spacing=6)
+        purpose = Gtk.Box(hexpand=True)
         purpose.add_css_class('linked')
-        self.purpose = Gtk.Entry(placeholder_text='General purpose (leave blank)',
-                                 hexpand=True, width_chars=24, max_width_chars=48)
+        self.purpose = Gtk.Entry(placeholder_text='Purpose (optional)',
+                                 hexpand=True, width_chars=14, max_width_chars=36)
+        self.purpose.set_tooltip_text('Optional purpose for Clean up (leave blank for general tidy-up)')
         self.purpose.set_text(cleanup.purpose)
         self.purpose.connect('changed', self._purpose_changed)
         self.purpose.connect('icon-release', lambda *_: self.purpose.set_text(''))
-        label.set_mnemonic_widget(self.purpose)
         purpose.append(self.purpose)
         self.purpose_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         popover = Gtk.Popover(child=self.purpose_list)
@@ -76,17 +74,17 @@ class CleanupView:
                                            tooltip_text='Choose a purpose')
         purpose.append(self.purpose_menu)
         bar.append(purpose)
+
         self.clean_button = Gtk.Button(label='Clean up', action_name='app.clean-up',
                                        tooltip_text='Clean up this draft (Ctrl+Shift+L)')
-        self.clean_button.add_css_class('suggested-action')
+        self.clean_button.add_css_class('dogspeak-clean-btn')
         bar.append(self.clean_button)
-        bar.append(Gtk.Box(hexpand=True))
-        revert = Gtk.Box(spacing=6)
-        revert.append(Gtk.Image(icon_name='edit-undo-symbolic'))
-        revert.append(Gtk.Label(label='Revert'))
-        self.revert_button = Gtk.Button(child=revert, tooltip_text='Go back one version')
+
+        self.revert_button = Gtk.Button(icon_name='edit-undo-symbolic',
+                                        tooltip_text='Go back one version')
         self.revert_button.connect('clicked', lambda _b: window.perform(cleanup.revert))
         bar.append(self.revert_button)
+
         self.version_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         versions = Gtk.Popover(child=self.version_list)
         versions.connect('show', lambda _p: self._fill_versions())
@@ -108,7 +106,7 @@ class CleanupView:
         self.panel_button.set_active(show)
         self.panel_button.connect('toggled', self._panel_toggled)
 
-        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=300,
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, width_request=280,
                        margin_start=16, margin_end=16, margin_top=16, margin_bottom=16)
         head = Gtk.Box()
         title = Gtk.Label(label='Suggestions', xalign=0, hexpand=True)
@@ -119,8 +117,9 @@ class CleanupView:
         hide.connect('clicked', lambda _b: self.panel_button.set_active(False))
         head.append(hide)
         side.append(head)
-        caption = Gtk.Label(label='From the last clean up. Dismiss what you’ve dealt with.',
-                            xalign=0, wrap=True)
+        caption = Gtk.Label(
+            label='From the last clean up. Speak missing details into your draft, then dismiss.',
+            xalign=0, wrap=True)
         caption.add_css_class('caption')
         caption.add_css_class('dim-label')
         side.append(caption)
@@ -133,9 +132,10 @@ class CleanupView:
                                     child=side)
         frame = Gtk.Box()
         frame.add_css_class('sidebar-pane')
+        frame.add_css_class('dogspeak-sidebar')
         frame.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
         frame.append(scroll)
-        scroll.set_size_request(320, -1)
+        scroll.set_size_request(300, -1)
         self.panel = Gtk.Revealer(child=frame, reveal_child=show,
                                   transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT)
         # Wrapping labels inside would otherwise pull the panel to half the window.
@@ -213,10 +213,13 @@ class CleanupView:
         self.clean_button.set_sensitive(cleanup.can_start())
         versions = cleanup.versions()
         current = cleanup.current_index()
+        has_versions = bool(versions)
         self.version_menu.set_label(
-            f'Version {current + 1} of {len(versions)}' if versions else 'No versions yet')
+            f'Version {current + 1} of {len(versions)}' if has_versions else 'No versions yet')
+        self.revert_button.set_visible(has_versions)
+        self.version_menu.set_visible(has_versions)
         self.revert_button.set_sensitive(bool(current) and not busy_here)
-        self.version_menu.set_sensitive(bool(versions) and not busy_here)
+        self.version_menu.set_sensitive(has_versions and not busy_here)
         window.editor.set_editable(not busy_here)
         if busy_here:
             window.editor.add_css_class('dim-label')
@@ -227,6 +230,7 @@ class CleanupView:
         for index, text in suggestions:
             row = Gtk.Box(spacing=8)
             row.add_css_class('card')
+            row.add_css_class('dogspeak-card')
             body = Gtk.Label(label=text, xalign=0, wrap=True, hexpand=True, selectable=True,
                              margin_start=12, margin_top=10, margin_bottom=10)
             row.append(body)

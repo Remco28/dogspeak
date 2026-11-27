@@ -13,6 +13,7 @@ import time
 import uuid
 
 from .storage import transcript_insertion
+from .ui_values import MAX_RECORDING_SECONDS
 
 MAX_IMPORT_BYTES = 256 * 1024 * 1024
 
@@ -448,7 +449,7 @@ class Controller:
     def tick(self):
         if self.recording and (
                 not self.recorder.running or
-                self.clock() - self.recording_job['started_at'] >= 115):
+                self.clock() - self.recording_job['started_at'] >= MAX_RECORDING_SECONDS):
             self.stop_recording()
         self.on_status()
         return not self.closed

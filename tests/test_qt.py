@@ -417,6 +417,68 @@ class QtWindowTests(unittest.TestCase):
         self.assertTrue(self.engine.closed)
         self.assertEqual(quits, [True])
 
+    def test_hero_strip_surfaces_loading_on_air_cap_and_external_llm(self):
+        w = self.window
+        # Model loading shows WARMING UP lamp, puppy mascot and meter
+        self.assertEqual(w.state_lamp.text(), 'WARMING UP')
+        self.assertFalse(w.tape_meter.isHidden())
+        self.assertEqual(w.tape_meter.mode, 'loading')
+
+        # Ready shifts to STANDBY with 1:55/take hardware spec and hides meter
+        self.ready()
+        self.assertEqual(w.state_lamp.text(), 'STANDBY')
+        self.assertEqual(w.timer_label.text(), '1:55 / take')
+        self.assertTrue(w.tape_meter.isHidden())
+
+        # Recording shows ON AIR lamp, M:SS / 1:55 readout and filled tape meter
+        now = [100.0]
+        self.controller.clock = lambda: now[0]
+        w.toggle_recording()
+        now[0] = 152.0
+        w.render_status()
+        self.assertEqual(w.state_lamp.text(), '● ON AIR')
+        self.assertEqual(w.timer_label.text(), '0:52 / 1:55')
+        self.assertEqual(w.tape_meter.mode, 'recording')
+        self.assertIn('0:52 / 1:55', w.pill.title)
+        self.assertIsNotNone(w.pill.progress)
+
+        # Near the 1:55 cap (>= 95 s) warns clearly in both hero strip and pill
+        now[0] = 202.0
+        w.render_status()
+        self.assertIn('13s LEFT', w.state_lamp.text())
+        self.assertEqual(w.timer_label.text(), '1:42 / 1:55')
+        self.assertEqual(w.tape_meter.mode, 'nearcap')
+        self.assertTrue(w.pill.warn)
+        self.controller.cancel_recording()
+
+        # External Clean up lights up EXTERNAL badge
+        self.store.set_setting('llm_model', 'some/model')
+        self.keyring.set('https://openrouter.ai/api/v1', 'sk-test')
+        w.editor.setPlainText('draft text')
+        w._changed()
+        self.cleanup.busy = {
+            'draft_id': self.controller.draft.id,
+            'sent': 'draft text',
+            'purpose': '',
+            'config': self.cleanup.config(),
+            'started_at': 0.0,
+        }
+        w.render_status()
+        self.assertEqual(w.state_lamp.text(), '↗ EXTERNAL · OPENROUTER')
+        self.assertEqual(w.tape_meter.mode, 'llm')
+        self.cleanup.busy = None
+
+    def test_narrow_window_switches_dock_to_two_rows_without_clipping(self):
+        w = self.window
+        w.cleanup_view.show_panel(False)
+        w.resize(1000, 700)
+        w._apply_responsive_layout(1000)
+        self.assertTrue(w.dock_row2_widget.isHidden())
+        w.resize(450, 700)
+        w._apply_responsive_layout(450)
+        self.assertFalse(w.dock_row2_widget.isHidden())
+        self.assertLessEqual(w.minimumWidth(), 450)
+
 
 @unittest.skipIf(QApplication is None, 'PySide6 is not installed (uv sync installs it)')
 class SingleInstanceTests(unittest.TestCase):

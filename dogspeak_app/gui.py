@@ -1,8 +1,14 @@
-"""Native, local Dogspeak scratchpad. Run with the system Python."""
+"""Native, local Dogspeak scratchpad for Linux (GNOME). Run with system Python.
+
+Field Recorder + ON AIR Focused Instrument layout: slim header with the
+puppy-behind-the-microphone mark, eye-level Hero Instrument Strip with a 1:55
+tape meter, generous numbered-line draft sheet, and a bottom Instrument Dock
+that fits cleanly down to 440 px wide.
+"""
 from pathlib import Path
 import os
 import sys
-
+import time
 
 import gi
 
@@ -13,10 +19,28 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, GtkSource  # noqa: E402
 
 from .controller import Controller as _Controller, MAX_IMPORT_BYTES, background, move_lines  # noqa: E402,F401
 from .paths import data_dir as _data_dir  # noqa: E402
-from .ui_values import CLIPBOARD_TIMEOUT_MS, FEEDBACK_SECONDS, MIN_WINDOW_WIDTH  # noqa: E402
+from .ui_values import (  # noqa: E402
+    CLIPBOARD_TIMEOUT_MS,
+    DEFAULT_WINDOW_HEIGHT,
+    DEFAULT_WINDOW_WIDTH,
+    EDITOR_MAX_WIDTH,
+    FEEDBACK_SECONDS,
+    MAX_RECORDING_LABEL,
+    MAX_RECORDING_SECONDS,
+    MIN_WINDOW_WIDTH,
+    NEAR_CAP_SECONDS,
+    PALETTE_DARK,
+    PALETTE_LIGHT,
+    RADIUS_CARD,
+    RADIUS_CONTROL,
+    RADIUS_STRIP,
+    format_cap_readout,
+    format_duration,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = 'io.github.Remco28.Dogspeak'
+LOGO_PATH = ROOT / 'data' / 'icons' / 'hicolor' / '128x128' / 'apps' / f'{APP_ID}.png'
 # The global binding desktop_install.py registers; also an in-app accelerator.
 SHORTCUT_LABEL = 'Super+R'
 
@@ -24,6 +48,201 @@ SHORTCUT_LABEL = 'Super+R'
 OVERLAY_BUS = 'io.github.Remco28.Dogspeak.Overlay'
 OVERLAY_PATH = '/io/github/Remco28/Dogspeak/Overlay'
 OVERLAY_IFACE = 'io.github.Remco28.Dogspeak.Overlay'
+
+_HERO_STATES = ('loading', 'ready', 'recording', 'nearcap', 'transcribing', 'llm', 'error')
+
+
+def _gtk_css(dark=False):
+    """Field Recorder + ON AIR stylesheet for GTK4 / libadwaita."""
+    p = PALETTE_DARK if dark else PALETTE_LIGHT
+    return f"""
+    window.dogspeak-window {{
+        background-color: {p['canvas']};
+        color: {p['ink']};
+    }}
+    headerbar.dogspeak-header {{
+        background-color: {p['surface']};
+        color: {p['ink']};
+        border-bottom: 1px solid {p['border']};
+        box-shadow: none;
+    }}
+    .dogspeak-canvas {{
+        background-color: {p['canvas']};
+        color: {p['ink']};
+    }}
+    textview.dogspeak-editor,
+    textview.dogspeak-editor text {{
+        background-color: {p['canvas']};
+        color: {p['ink']};
+    }}
+    textview.dogspeak-editor border.left {{
+        background-color: {p['canvas']};
+        color: {p['muted']};
+        font-family: monospace;
+    }}
+
+    /* Eye-level Hero Instrument Strip */
+    .dogspeak-hero {{
+        background-color: {p['surface']};
+        border: 1px solid {p['border']};
+        border-radius: {RADIUS_STRIP}px;
+        padding: 8px 12px;
+    }}
+    .dogspeak-hero.state-loading {{
+        background-color: {p['warn_soft']};
+        border-color: {p['warn']};
+    }}
+    .dogspeak-hero.state-recording {{
+        background-color: {p['accent_soft']};
+        border-color: {p['accent']};
+    }}
+    .dogspeak-hero.state-nearcap {{
+        background-color: {p['warn_soft']};
+        border-color: {p['warn']};
+    }}
+    .dogspeak-hero.state-transcribing {{
+        background-color: {p['local_soft']};
+        border-color: {p['local']};
+    }}
+    .dogspeak-hero.state-llm {{
+        background-color: {p['ext_soft']};
+        border-color: {p['ext']};
+    }}
+    .dogspeak-hero.state-error {{
+        background-color: {p['danger_soft']};
+        border-color: {p['danger']};
+    }}
+
+    .dogspeak-lamp {{
+        font-family: monospace;
+        font-size: 9pt;
+        font-weight: 700;
+        padding: 2px 7px;
+        border-radius: {RADIUS_CONTROL}px;
+        background-color: {p['local_soft']};
+        color: {p['local']};
+        border: 1px solid {p['local']};
+    }}
+    .dogspeak-lamp.state-loading {{
+        background-color: {p['warn']};
+        color: {p['warn_ink']};
+        border-color: {p['warn']};
+    }}
+    .dogspeak-lamp.state-recording {{
+        background-color: {p['accent']};
+        color: {p['accent_ink']};
+        border-color: {p['accent']};
+    }}
+    .dogspeak-lamp.state-nearcap {{
+        background-color: {p['warn']};
+        color: {p['warn_ink']};
+        border-color: {p['warn']};
+    }}
+    .dogspeak-lamp.state-transcribing {{
+        background-color: {p['local']};
+        color: {p['accent_ink']};
+        border-color: {p['local']};
+    }}
+    .dogspeak-lamp.state-llm {{
+        background-color: {p['ext']};
+        color: {p['ext_ink']};
+        border-color: {p['ext']};
+    }}
+    .dogspeak-lamp.state-error {{
+        background-color: {p['danger']};
+        color: {p['accent_ink']};
+        border-color: {p['danger']};
+    }}
+
+    .dogspeak-hero-status {{
+        font-weight: 600;
+        color: {p['ink']};
+    }}
+    .dogspeak-hero-status.error {{
+        color: {p['danger']};
+    }}
+    .dogspeak-timer {{
+        font-family: monospace;
+        font-weight: 700;
+        font-feature-settings: "tnum";
+        color: {p['ink']};
+    }}
+    .dogspeak-hint {{
+        color: {p['muted']};
+        font-size: 9pt;
+    }}
+
+    /* Tape meter (1:55 recording cap & busy indicator) */
+    progressbar.dogspeak-meter trough {{
+        min-height: 6px;
+        border-radius: 3px;
+        background-color: {p['border']};
+    }}
+    progressbar.dogspeak-meter progress {{
+        min-height: 6px;
+        border-radius: 3px;
+        background-color: {p['accent']};
+    }}
+    progressbar.dogspeak-meter.state-loading progress,
+    progressbar.dogspeak-meter.state-nearcap progress {{
+        background-color: {p['warn']};
+    }}
+    progressbar.dogspeak-meter.state-transcribing progress {{
+        background-color: {p['local']};
+    }}
+    progressbar.dogspeak-meter.state-llm progress {{
+        background-color: {p['ext']};
+    }}
+
+    /* Bottom Field Recorder Instrument Dock */
+    .dogspeak-dock {{
+        background-color: {p['surface']};
+        border: 1px solid {p['border']};
+        border-radius: {RADIUS_CARD}px;
+        padding: 8px;
+    }}
+    button.dogspeak-record-onair {{
+        background-color: {p['accent']};
+        color: {p['accent_ink']};
+        border: 1px solid {p['accent']};
+        border-radius: {RADIUS_CONTROL}px;
+    }}
+    button.dogspeak-record-onair:hover {{
+        background-color: {p['accent_hover']};
+    }}
+    button.dogspeak-clean-btn {{
+        background-color: {p['ext']};
+        color: {p['ext_ink']};
+        border: 1px solid {p['ext']};
+        border-radius: {RADIUS_CONTROL}px;
+    }}
+    button.dogspeak-clean-btn:hover {{
+        background-color: {p['ext_hover']};
+    }}
+    button.dogspeak-copy-clear {{
+        background-color: {p['ink']};
+        color: {p['canvas']};
+        border: 1px solid {p['ink']};
+        border-radius: {RADIUS_CONTROL}px;
+    }}
+    button.dogspeak-copy-clear:disabled,
+    button.dogspeak-clean-btn:disabled {{
+        background-color: {p['surface']};
+        color: {p['muted']};
+        border-color: {p['border']};
+    }}
+
+    /* Suggestions rail */
+    .dogspeak-sidebar {{
+        background-color: {p['surface']};
+    }}
+    .dogspeak-card {{
+        background-color: {p['elevated']};
+        border: 1px solid {p['border']};
+        border-radius: {RADIUS_CARD}px;
+        box-shadow: none;
+    }}
+    """
 
 
 class OverlayStatus:
@@ -126,14 +345,26 @@ class Controller(_Controller):
         super().__init__(store, engine_factory, recorder, data_dir, dispatch, **kwargs)
 
 
+def _make_logo_image(pixel_size):
+    if LOGO_PATH.exists():
+        img = Gtk.Image.new_from_file(str(LOGO_PATH))
+    else:
+        img = Gtk.Image.new_from_icon_name(APP_ID)
+    img.set_pixel_size(pixel_size)
+    return img
+
+
 class ScratchpadWindow(Adw.ApplicationWindow):
     def __init__(self, app, controller, sources_provider, cleanup=None):
-        super().__init__(application=app, title='Dogspeak', default_width=1100,
-                         default_height=720)
+        super().__init__(application=app, title='Dogspeak',
+                         default_width=DEFAULT_WINDOW_WIDTH,
+                         default_height=DEFAULT_WINDOW_HEIGHT)
         self.controller = controller
         self.rendering, self.save_source, self.closing = False, 0, False
         self.copy_clear_request = self.clear_toast = None
+        self._hero_state = None
         self.set_size_request(MIN_WINDOW_WIDTH, -1)
+        self.add_css_class('dogspeak-window')
         self.last_edit, self.typing_pause = float('-inf'), 1.0
         self.drafts_dialog = self.save_error_dialog = self.settings_dialog = None
         if cleanup is None:
@@ -144,28 +375,33 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.cleanup = cleanup
         self.cleanup_view = CleanupView(self, cleanup)
         self.displayed_draft = None
+
+        self._css_provider = Gtk.CssProvider()
+        display = Gdk.Display.get_default()
+        if display is not None:
+            Gtk.StyleContext.add_provider_for_display(
+                display, self._css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._load_css()
+
         layout = Adw.ToolbarView()
         self.toasts = Adw.ToastOverlay(child=layout)
         self.set_content(self.toasts)
+
+        # Slim Field Recorder header with the puppy-at-the-microphone mark
         header = Adw.HeaderBar()
-        self.title_entry = Gtk.Entry(placeholder_text='Draft title', width_chars=22,
-                                     max_width_chars=36, hexpand=True)
-        self.title_entry.set_tooltip_text('Draft title')
-        header.set_title_widget(self.title_entry)
+        header.add_css_class('dogspeak-header')
+        header.pack_start(_make_logo_image(24))
         for action, icon, tooltip in [
             ('new-draft', 'document-new-symbolic', 'New draft (Ctrl+N)'),
             ('open-draft', 'document-open-symbolic', 'Open a draft (Ctrl+O)'),
         ]:
             header.pack_start(Gtk.Button(icon_name=icon, action_name='app.' + action,
                                          tooltip_text=tooltip))
-        self.record_button = Gtk.Button(action_name='app.toggle-recording',
-                                        tooltip_text=f'Record / stop ({SHORTCUT_LABEL})')
-        record_box = Gtk.Box(spacing=6)
-        self.record_icon = Gtk.Image(icon_name='media-record-symbolic')
-        self.record_label = Gtk.Label(label='Record')
-        record_box.append(self.record_icon)
-        record_box.append(self.record_label)
-        self.record_button.set_child(record_box)
+        self.title_entry = Gtk.Entry(placeholder_text='Draft title', width_chars=16,
+                                     max_width_chars=30, hexpand=True)
+        self.title_entry.set_tooltip_text('Draft title')
+        header.set_title_widget(self.title_entry)
+
         line_menu = Gio.Menu()
         line_menu.append('Move Line Up', 'app.move-line-up')
         line_menu.append('Move Line Down', 'app.move-line-down')
@@ -180,24 +416,66 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         menu.append('Quit', 'app.quit')
         header.pack_end(Gtk.MenuButton(icon_name='open-menu-symbolic', menu_model=menu,
                                        tooltip_text='Main menu', primary=True))
-        header.pack_end(self.record_button)
         header.pack_end(self.cleanup_view.panel_button)
-        header.pack_end(Gtk.Button(icon_name='edit-copy-symbolic', action_name='app.copy-all',
-                                   tooltip_text='Copy all (Ctrl+Shift+C)'))
-        self.copy_clear_button = Gtk.Button(label='Copy & Clear', action_name='app.copy-clear',
-                                            tooltip_text='Copy all text and clear this draft (Ctrl+Shift+X)')
-        header.pack_end(self.copy_clear_button)
+        self.sources = [None]
+        self.updating_sources = False
+        self.microphone = Gtk.DropDown(model=Gtk.StringList.new(['System default']))
+        self.microphone.set_tooltip_text('Microphone')
+        self.microphone.set_size_request(125, -1)
+        self.microphone.connect('notify::selected', self._microphone_changed)
+        header.pack_end(self.microphone)
         layout.add_top_bar(header)
-        layout.add_top_bar(self.cleanup_view.bar)
-        layout.add_top_bar(self.cleanup_view.banner)
+
+        # Focused Instrument stage (Hero Strip + Banner + Editor + Bottom Dock)
+        stage = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        stage.add_css_class('dogspeak-canvas')
+
+        # Eye-level Hero Instrument Strip
+        self.hero_strip = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                                  margin_start=12, margin_end=12, margin_top=12, margin_bottom=4)
+        self.hero_strip.add_css_class('dogspeak-hero')
+        hero_top = Gtk.Box(spacing=8)
+        self.hero_mascot = _make_logo_image(26)
+        self.hero_mascot.set_visible(False)
+        hero_top.append(self.hero_mascot)
+        self.state_lamp = Gtk.Label(label='WARMING UP')
+        self.state_lamp.add_css_class('dogspeak-lamp')
+        hero_top.append(self.state_lamp)
+        self.spinner = Gtk.Spinner()
+        self.spinner.set_visible(False)
+        hero_top.append(self.spinner)
+        self.status_label = Gtk.Label(xalign=0, hexpand=True, wrap=True, selectable=True)
+        self.status_label.add_css_class('dogspeak-hero-status')
+        hero_top.append(self.status_label)
+        self.hero_hint = Gtk.Label(label='')
+        self.hero_hint.add_css_class('dogspeak-hint')
+        self.hero_hint.set_visible(False)
+        hero_top.append(self.hero_hint)
+        self.timer_label = Gtk.Label(label='')
+        self.timer_label.add_css_class('dogspeak-timer')
+        hero_top.append(self.timer_label)
+        self.hero_strip.append(hero_top)
+
+        self.tape_meter = Gtk.ProgressBar()
+        self.tape_meter.add_css_class('dogspeak-meter')
+        self.tape_meter.set_pulse_step(0.18)
+        self.tape_meter.set_visible(False)
+        self.hero_strip.append(self.tape_meter)
+
+        hero_clamp = Adw.Clamp(maximum_size=EDITOR_MAX_WIDTH + 60, child=self.hero_strip)
+        stage.append(hero_clamp)
+        stage.append(self.cleanup_view.banner)
+
+        # Draft sheet (keep editor direct child of ScrolledWindow)
         self.buffer = self._new_buffer()
         self.buffers = {}
         self.editor = GtkSource.View(buffer=self.buffer, wrap_mode=Gtk.WrapMode.WORD_CHAR,
-                                     left_margin=16, right_margin=40, top_margin=28,
-                                     bottom_margin=28, pixels_above_lines=3,
+                                     left_margin=20, right_margin=32, top_margin=22,
+                                     bottom_margin=22, pixels_above_lines=3,
                                      pixels_below_lines=3, vexpand=True,
                                      show_line_numbers=True, highlight_current_line=True)
         self.editor.add_css_class('view')
+        self.editor.add_css_class('dogspeak-editor')
         self.editor.set_extra_menu(line_menu)
         self.editor.connect('move-lines', self._move_lines)
         Adw.StyleManager.get_default().connect('notify::dark', self._theme_changed)
@@ -205,28 +483,40 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         self.editor.connect('map', lambda *_: GLib.idle_add(self._show_cursor))
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         scroll.set_child(self.editor)
-        content = Gtk.Box()
         scroll.set_hexpand(True)
-        content.append(scroll)
+        stage.append(scroll)
+
+        # Bottom Field Recorder Instrument Dock (fits cleanly down to 440 px wide)
+        dock = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                       margin_start=12, margin_end=12, margin_top=6, margin_bottom=12)
+        dock.add_css_class('dogspeak-dock')
+        row1 = Gtk.Box(spacing=8)
+        self.record_button = Gtk.Button(action_name='app.toggle-recording',
+                                        tooltip_text=f'Record / stop ({SHORTCUT_LABEL})')
+        record_box = Gtk.Box(spacing=6)
+        self.record_icon = Gtk.Image(icon_name='media-record-symbolic')
+        self.record_label = Gtk.Label(label='Record')
+        record_box.append(self.record_icon)
+        record_box.append(self.record_label)
+        self.record_button.set_child(record_box)
+        row1.append(self.record_button)
+        row1.append(Gtk.Box(hexpand=True))
+        self.copy_clear_button = Gtk.Button(label='Copy & Clear', action_name='app.copy-clear',
+                                            tooltip_text='Copy all text and clear this draft (Ctrl+Shift+X)')
+        self.copy_clear_button.add_css_class('dogspeak-copy-clear')
+        row1.append(self.copy_clear_button)
+        row1.append(Gtk.Button(icon_name='edit-copy-symbolic', action_name='app.copy-all',
+                               tooltip_text='Copy all (Ctrl+Shift+C)'))
+        dock.append(row1)
+        dock.append(self.cleanup_view.bar)
+        dock_clamp = Adw.Clamp(maximum_size=EDITOR_MAX_WIDTH + 60, child=dock)
+        stage.append(dock_clamp)
+
+        content = Gtk.Box()
+        content.append(stage)
         content.append(self.cleanup_view.panel)
         layout.set_content(content)
-        status = Gtk.Box(spacing=10, margin_start=16, margin_end=16,
-                         margin_top=10, margin_bottom=10)
-        self.spinner = Gtk.Spinner()
-        self.status_label = Gtk.Label(xalign=0, hexpand=True, wrap=True, selectable=True)
-        self.timer_label = Gtk.Label(label='', width_chars=5)
-        self.timer_label.add_css_class('dim-label')
-        status.append(self.spinner)
-        status.append(self.status_label)
-        status.append(self.timer_label)
-        self.sources = [None]
-        self.updating_sources = False
-        self.microphone = Gtk.DropDown(model=Gtk.StringList.new(['System default']))
-        self.microphone.set_tooltip_text('Microphone')
-        self.microphone.set_size_request(160, -1)
-        self.microphone.connect('notify::selected', self._microphone_changed)
-        status.append(self.microphone)
-        layout.add_bottom_bar(status)
+
         self.buffer.connect('changed', self._changed)
         self.title_entry.connect('changed', self._changed)
         self.controller.on_draft = self.render_draft
@@ -249,6 +539,14 @@ class ScratchpadWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._set_sources, sources)
         controller.spawn(discover)
 
+    def _load_css(self):
+        dark = Adw.StyleManager.get_default().get_dark()
+        css = _gtk_css(dark)
+        if hasattr(self._css_provider, 'load_from_string'):
+            self._css_provider.load_from_string(css)
+        else:
+            self._css_provider.load_from_data(css.encode('utf-8'))
+
     def _scheme(self):
         dark = Adw.StyleManager.get_default().get_dark()
         return GtkSource.StyleSchemeManager.get_default().get_scheme(
@@ -261,6 +559,7 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         return buffer
 
     def _theme_changed(self, *_):
+        self._load_css()
         for buffer in self.buffers.values():
             buffer.set_style_scheme(self._scheme())
 
@@ -446,34 +745,112 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         finally:
             self.rendering = False
 
+    def _set_hero_state(self, state, lamp_text):
+        if state != self._hero_state:
+            for old in _HERO_STATES:
+                cls = f'state-{old}'
+                self.hero_strip.remove_css_class(cls)
+                self.state_lamp.remove_css_class(cls)
+                self.tape_meter.remove_css_class(cls)
+            cls = f'state-{state}'
+            self.hero_strip.add_css_class(cls)
+            self.state_lamp.add_css_class(cls)
+            self.tape_meter.add_css_class(cls)
+            self._hero_state = state
+        if self.state_lamp.get_text() != lamp_text:
+            self.state_lamp.set_text(lamp_text)
+
     def render_status(self):
         c = self.controller
-        active = c.recording or c.state in ('loading', 'transcribing')
-        self.status_label.set_text(c.message)
-        self.status_label.set_tooltip_text(c.message)
-        started_at = c.recording_job['started_at'] if c.recording else c.started_at
-        elapsed = int(max(0, c.clock() - started_at))
-        self.timer_label.set_text(f'{elapsed // 60:02}:{elapsed % 60:02}' if active else '')
-        self.spinner.set_spinning(c.state in ('loading', 'transcribing'))
         recording = c.recording
+        cleanup = getattr(self, 'cleanup', None)
+        started_at = c.recording_job['started_at'] if recording else c.started_at
+        elapsed = max(0.0, c.clock() - started_at)
+        elapsed_int = int(elapsed)
+
+        message = c.message
+        show_mascot = False
+        hint = ''
+        meter_visible = False
+        meter_fraction = None
+        spinning = False
+
+        if recording:
+            near = elapsed_int >= NEAR_CAP_SECONDS
+            left = max(0, MAX_RECORDING_SECONDS - elapsed_int)
+            state = 'nearcap' if near else 'recording'
+            lamp = f'● ON AIR · {left}s LEFT' if near else '● ON AIR'
+            self._set_hero_state(state, lamp)
+            timer_text = format_cap_readout(elapsed_int)
+            hint = 'Enter stops · Esc cancels'
+            meter_visible = True
+            meter_fraction = min(1.0, elapsed / MAX_RECORDING_SECONDS)
+        elif c.state == 'transcribing':
+            self._set_hero_state('transcribing', 'LOCAL CPU')
+            timer_text = format_duration(elapsed_int)
+            hint = 'Esc drops'
+            meter_visible = True
+            spinning = True
+        elif cleanup is not None and cleanup.busy:
+            # Clean up doesn't need the speech model, so it outranks "Loading model…".
+            from .llm import provider_name
+            cfg = cleanup.busy['config']
+            name = provider_name(cfg['base_url'])
+            short = name.split(' (', 1)[0].upper()
+            is_local_llm = not cleanup.needs_key(cfg['base_url'])
+            message = f'Sending this draft to {name}… Esc cancels.'
+            lamp = f'LOCAL LLM · {short}' if is_local_llm else f'↗ EXTERNAL · {short}'
+            self._set_hero_state('llm', lamp)
+            llm_elapsed = int(max(0, time.monotonic() - cleanup.busy.get('started_at', time.monotonic())))
+            timer_text = format_duration(llm_elapsed)
+            hint = cfg.get('model') or ''
+            meter_visible = True
+            spinning = True
+            show_mascot = True
+        elif c.state == 'loading':
+            self._set_hero_state('loading', 'WARMING UP')
+            timer_text = format_duration(elapsed_int)
+            hint = 'You can type while Bark loads'
+            meter_visible = True
+            spinning = True
+            show_mascot = True
+        elif c.state == 'error':
+            self._set_hero_state('error', 'ERROR')
+            timer_text = ''
+        else:
+            self._set_hero_state('ready', 'STANDBY')
+            timer_text = f'{MAX_RECORDING_LABEL} / take'
+
+        self.hero_mascot.set_visible(show_mascot)
+        self.status_label.set_text(message)
+        self.status_label.set_tooltip_text(message)
+        if c.state == 'error' and not (recording or (cleanup is not None and cleanup.busy)):
+            self.status_label.add_css_class('error')
+        else:
+            self.status_label.remove_css_class('error')
+        self.timer_label.set_text(timer_text)
+        self.hero_hint.set_text(hint)
+        self.hero_hint.set_visible(bool(hint))
+        self.spinner.set_spinning(spinning)
+        self.tape_meter.set_visible(meter_visible)
+        if meter_visible:
+            if meter_fraction is not None:
+                self.tape_meter.set_fraction(meter_fraction)
+            else:
+                self.tape_meter.pulse()
+
         self.record_label.set_text('Stop' if recording else 'Record')
-        self.record_icon.set_from_icon_name('media-playback-stop-symbolic' if recording else 'media-record-symbolic')
+        self.record_icon.set_from_icon_name(
+            'media-playback-stop-symbolic' if recording else 'media-record-symbolic')
         self.record_button.set_sensitive(not c.closed and (recording or c.engine_failed or (
             c.ready and not c.pending and not c.recording_job)))
         self.microphone.set_sensitive(not recording and not c.recording_job)
         if recording:
-            self.record_button.add_css_class('destructive-action')
+            self.record_button.add_css_class('dogspeak-record-onair')
         else:
-            self.record_button.remove_css_class('destructive-action')
-        cleanup = getattr(self, 'cleanup', None)
+            self.record_button.remove_css_class('dogspeak-record-onair')
         if cleanup is not None:
             self.cleanup_view.clean_button.set_sensitive(cleanup.can_start())
-            # Clean up doesn't need the speech model, so it outranks "Loading model…".
-            if cleanup.busy and not (c.recording or c.state == 'transcribing'):
-                from .llm import provider_name
-                name = provider_name(cleanup.busy['config']['base_url'])
-                self.status_label.set_text(f'Sending this draft to {name}… Esc cancels.')
-                self.spinner.set_spinning(True)
         self._sync_overlay()
         self._update_clear_actions()
 
@@ -774,7 +1151,9 @@ class ScratchpadWindow(Adw.ApplicationWindow):
         c = self.controller
         if c.recording:
             elapsed = int(max(0, c.clock() - c.recording_job['started_at']))
-            return 'recording', 'Recording', f'{elapsed // 60}:{elapsed % 60:02}', self._stop_hint()
+            left = max(0, MAX_RECORDING_SECONDS - elapsed)
+            detail = format_cap_readout(elapsed) + (f' · {left}s left' if elapsed >= NEAR_CAP_SECONDS else '')
+            return 'recording', 'Recording', detail, self._stop_hint()
         if c.state == 'transcribing' and (c.pending or c.recording_job):
             return 'transcribing', c.message, '', 'Esc drops this result'
         return None
